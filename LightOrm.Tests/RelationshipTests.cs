@@ -78,6 +78,7 @@ namespace LightOrm.Tests
                     salary DECIMAL(18,2) NOT NULL,
                     department_id INT NULL,
                     supervisor_id INT NULL,
+                    __hash_v VARCHAR(64),
                     CreatedAt DATETIME NOT NULL,
                     UpdatedAt DATETIME NOT NULL
                 )", _connection))
@@ -92,6 +93,7 @@ namespace LightOrm.Tests
                     budget DECIMAL(18,2) NOT NULL,
                     location VARCHAR(100) NOT NULL,
                     head_employee_id INT NULL,
+                    __hash_v VARCHAR(64),
                     CreatedAt DATETIME NOT NULL,
                     UpdatedAt DATETIME NOT NULL
                 )", _connection))
@@ -103,7 +105,26 @@ namespace LightOrm.Tests
             await new StudentModel().EnsureTableExistsAsync(_connection);
             await new AssignmentModel().EnsureTableExistsAsync(_connection);
             await new StudentCourseModel().EnsureTableExistsAsync(_connection);
-            await new EmployeeProjectModel().EnsureTableExistsAsync(_connection);
+
+            // Create employee_projects table with __hash_v
+            using (var cmd = new MySqlCommand(@"
+                CREATE TABLE IF NOT EXISTS employee_projects (
+                    Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    employee_id INT NOT NULL,
+                    project_id INT NOT NULL,
+                    role VARCHAR(100) NOT NULL,
+                    hours_allocated INT NOT NULL,
+                    start_date DATETIME NOT NULL,
+                    end_date DATETIME NOT NULL,
+                    __hash_v VARCHAR(64),
+                    CreatedAt DATETIME NOT NULL,
+                    UpdatedAt DATETIME NOT NULL,
+                    FOREIGN KEY (employee_id) REFERENCES employees(Id),
+                    FOREIGN KEY (project_id) REFERENCES projects(Id)
+                )", _connection))
+            {
+                await cmd.ExecuteNonQueryAsync();
+            }
 
             // Add foreign key constraints
             var alterTableCommands = new[]

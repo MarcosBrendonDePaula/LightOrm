@@ -27,6 +27,51 @@ namespace LightOrm.Core.Models
         [Column("UpdatedAt")]
         public DateTime UpdatedAt { get; set; }
 
+        [Column("__hash_v", length: 64)]
+        public virtual string HashVersion { get; set; }
+
+        private static readonly Dictionary<string, (string Hash, object Data)> _cache = new Dictionary<string, (string Hash, object Data)>();
+
+        private string GenerateHash()
+        {
+            var properties = GetType().GetProperties()
+                .Where(p => p.GetCustomAttribute<ColumnAttribute>() != null 
+                    && p.Name != nameof(HashVersion));
+
+            var values = properties.Select(p => p.GetValue(this)?.ToString() ?? "null");
+            var data = string.Join("|", values);
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            var bytes = System.Text.Encoding.UTF8.GetBytes(data);
+            var hash = sha256.ComputeHash(bytes);
+            return Convert.ToBase64String(hash);
+        }
+
+        private string GetCacheKey() => $"{TableName}_{Id}";
+
+        private void UpdateHash()
+        {
+            HashVersion = GenerateHash();
+        }
+
+        private static void UpdateCache(string key, T instance)
+        {
+            _cache[key] = (instance.HashVersion, instance);
+        }
+
+        private static T GetFromCache(string key)
+        {
+            if (_cache.TryGetValue(key, out var cached))
+            {
+                return cached.Data as T;
+            }
+            return null;
+        }
+
+        private static bool IsCacheValid(string key, string hash)
+        {
+            return _cache.TryGetValue(key, out var cached) && cached.Hash == hash;
+        }
+
         public string GetTableName() => TableName;
 
         private static async Task LoadRelatedEntityAsync(MySqlConnection connection, T instance, PropertyInfo property, Type relatedType, object foreignKeyValue)
@@ -479,6 +524,126 @@ namespace LightOrm.Core.Models
             }
         }
 
+
+        public static async Task<T> FindByIdAsync(MySqlConnection connection, int id, bool includeRelated = false)
+        {
+            var cacheKey = $"{new T().TableName}_{id}";
+            
+            // First check if we have a cached instance
+            var cachedInstance = GetFromCache(cacheKey);
+            if (cachedInstance != null)
+            {
+                // Check if hash has changed
+                if (connection.State != System.Data.ConnectionState.Open)
+                    await connection.OpenAsync();
+
+                string hashQuery = $"SELECT __hash_v FROM {new T().TableName} WHERE Id = @Id";
+                using var hashCmd = new MySqlCommand(hashQuery, connection);
+                hashCmd.Parameters.AddWithValue("@Id", id);
+                
+                var currentHash = await hashCmd.ExecuteScalarAsync() as string;
+                if (IsCacheValid(cacheKey, currentHash))
+                {
+                    if (includeRelated)
+                    {
+                        await LoadRelatedDataAsync(connection, cachedInstance);
+                    }
+                    return cachedInstance;
+                }
+            }
+
+            // If not cached or hash changed, load from database
+            string query = $"SELECT * FROM {new T().TableName} WHERE Id = @Id";
+            using var cmd = new MySqlCommand(query, connection);
+            cmd.Parameters.AddWithValue("@Id", id);
+
+            T instance = null;
+            using (var reader = await cmd.ExecuteReaderAsync())
+            {
+                if (await reader.ReadAsync())
+                {
+                    instance = new T();
+                    PopulateInstance(reader, instance);
+                    instance.UpdateHash();
+                    UpdateCache(cacheKey, instance);
+                }
+            }
+
+            if (instance != null && includeRelated)
+            {
+                await LoadRelatedDataAsync(connection, instance);
+            }
+
+            return instance;
+        }
+
+        public static async Task<List<T>> FindAllAsync(MySqlConnection connection, bool includeRelated = false)
+        {
+            if (connection.State != System.Data.ConnectionState.Open)
+                await connection.OpenAsync();
+
+            // First get all IDs and hashes
+            var results = new List<T>();
+            var hashQuery = $"SELECT Id, __hash_v FROM {new T().TableName}";
+            using (var hashCmd = new MySqlCommand(hashQuery, connection))
+            {
+                using var hashReader = await hashCmd.ExecuteReaderAsync();
+                while (await hashReader.ReadAsync())
+                {
+                    var id = hashReader.GetInt32(0);
+                    var hash = hashReader.GetString(1);
+                    var cacheKey = $"{new T().TableName}_{id}";
+
+                    var cachedInstance = GetFromCache(cacheKey);
+                    if (cachedInstance != null && IsCacheValid(cacheKey, hash))
+                    {
+                        results.Add(cachedInstance);
+                    }
+                    else
+                    {
+                        results.Add(null); // Placeholder for instances that need loading
+                    }
+                }
+            }
+
+            // Load instances that weren't in cache or had different hash
+            var missingIndexes = results.Select((item, index) => new { Item = item, Index = index })
+                                      .Where(x => x.Item == null)
+                                      .Select(x => x.Index)
+                                      .ToList();
+
+            if (missingIndexes.Any())
+            {
+                string query = $"SELECT * FROM {new T().TableName}";
+                using var cmd = new MySqlCommand(query, connection);
+                using var reader = await cmd.ExecuteReaderAsync();
+                
+                int currentIndex = 0;
+                while (await reader.ReadAsync())
+                {
+                    if (missingIndexes.Contains(currentIndex))
+                    {
+                        var instance = new T();
+                        PopulateInstance(reader, instance);
+                        instance.UpdateHash();
+                        UpdateCache($"{new T().TableName}_{instance.Id}", instance);
+                        results[currentIndex] = instance;
+                    }
+                    currentIndex++;
+                }
+            }
+
+            if (includeRelated)
+            {
+                foreach (var instance in results)
+                {
+                    await LoadRelatedDataAsync(connection, instance);
+                }
+            }
+
+            return results;
+        }
+
         private async Task<T> InsertAsync(MySqlConnection connection)
         {
             if (connection.State != System.Data.ConnectionState.Open)
@@ -488,6 +653,7 @@ namespace LightOrm.Core.Models
 
             try
             {
+                UpdateHash(); // Generate initial hash
                 var (columns, parameters) = GetColumnAndParameterLists();
                 string query = $@"
                     INSERT INTO {TableName} ({columns}) 
@@ -503,6 +669,7 @@ namespace LightOrm.Core.Models
                 {
                     Id = Convert.ToInt32(result);
                     await transaction.CommitAsync();
+                    UpdateCache(GetCacheKey(), this as T);
                     return this as T;
                 }
 
@@ -525,6 +692,7 @@ namespace LightOrm.Core.Models
 
             try
             {
+                UpdateHash(); // Update hash before saving
                 var (setClause, _) = GetUpdateClauseAndPrimaryKeyValue("Id");
                 string query = $"UPDATE {TableName} SET {setClause} WHERE Id = @Id";
 
@@ -535,6 +703,7 @@ namespace LightOrm.Core.Models
 
                 await cmd.ExecuteNonQueryAsync();
                 await transaction.CommitAsync();
+                UpdateCache(GetCacheKey(), this as T);
                 return this as T;
             }
             catch (Exception)
@@ -559,70 +728,15 @@ namespace LightOrm.Core.Models
                 cmd.Parameters.AddWithValue("@Id", Id);
                 await cmd.ExecuteNonQueryAsync();
                 await transaction.CommitAsync();
+                
+                // Remove from cache
+                _cache.Remove(GetCacheKey());
             }
             catch (Exception)
             {
                 await transaction.RollbackAsync();
                 throw;
             }
-        }
-
-        public static async Task<T> FindByIdAsync(MySqlConnection connection, int id, bool includeRelated = false)
-        {
-            if (connection.State != System.Data.ConnectionState.Open)
-                await connection.OpenAsync();
-
-            string query = $"SELECT * FROM {new T().TableName} WHERE Id = @Id";
-            using var cmd = new MySqlCommand(query, connection);
-            cmd.Parameters.AddWithValue("@Id", id);
-
-            T instance = null;
-            using (var reader = await cmd.ExecuteReaderAsync() as MySqlDataReader)
-            {
-                if (await reader.ReadAsync())
-                {
-                    instance = new T();
-                    PopulateInstance(reader, instance);
-                }
-            }
-
-            if (instance != null && includeRelated)
-            {
-                await LoadRelatedDataAsync(connection, instance);
-            }
-
-            return instance;
-        }
-
-        public static async Task<List<T>> FindAllAsync(MySqlConnection connection, bool includeRelated = false)
-        {
-            var results = new List<T>();
-            
-            if (connection.State != System.Data.ConnectionState.Open)
-                await connection.OpenAsync();
-
-            string query = $"SELECT * FROM {new T().TableName}";
-            using var cmd = new MySqlCommand(query, connection);
-
-            using (var reader = await cmd.ExecuteReaderAsync() as MySqlDataReader)
-            {
-                while (await reader.ReadAsync())
-                {
-                    var instance = new T();
-                    PopulateInstance(reader, instance);
-                    results.Add(instance);
-                }
-            }
-
-            if (includeRelated)
-            {
-                foreach (var instance in results)
-                {
-                    await LoadRelatedDataAsync(connection, instance);
-                }
-            }
-
-            return results;
         }
     }
 }

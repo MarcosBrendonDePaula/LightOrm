@@ -1,7 +1,6 @@
 using System;
 using System.Threading.Tasks;
 using MySql.Data.MySqlClient;
-using LightOrm.Tests.Models;
 
 namespace LightOrm.Tests
 {
@@ -9,29 +8,27 @@ namespace LightOrm.Tests
     {
         static async Task Main(string[] args)
         {
-            try
+            var builder = new MySqlConnectionStringBuilder
             {
-                // Configure database connection
-                var builder = new MySqlConnectionStringBuilder
-                {
-                    Server = "37.60.241.117",
-                    Database = "teste",
-                    UserID = "admin",
-                    Password = "Melissa5",
-                    Port = 3309
-                };
+                Server = "37.60.241.117",
+                Database = "teste",
+                UserID = "admin",
+                Password = "Melissa5",
+                Port = 3309
+            };
 
-                // Run relationship tests
-                var tests = new RelationshipTests(builder.ConnectionString);
-                await tests.RunAllTests();
+            using var connection = new MySqlConnection(builder.ConnectionString);
+            await connection.OpenAsync();
 
-                Console.WriteLine("\nAll tests completed successfully!");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error: {ex.Message}");
-                Console.WriteLine(ex.StackTrace);
-            }
+            // Run relationship tests
+            Console.WriteLine("Running Relationship Tests...");
+            var relationshipTests = new RelationshipTests(builder.ConnectionString);
+            await relationshipTests.RunAllTests();
+
+            // Run performance tests
+            Console.WriteLine("\nRunning Performance Tests...");
+            var performanceTests = new PerformanceTests(connection);
+            await performanceTests.RunAllTests();
 
             Console.WriteLine("\nPress any key to exit...");
             Console.ReadKey();
