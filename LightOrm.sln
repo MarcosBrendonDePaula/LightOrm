@@ -1,0 +1,33 @@
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Core", "LightOrm.Core\LightOrm.Core.csproj", "{5B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Unity", "LightOrm.Unity\LightOrm.Unity.csproj", "{9B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Tests", "LightOrm.Tests\LightOrm.Tests.csproj", "{AB716883-7F5D-4F2F-8F7E-6AE3EFA8E8D2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AB716883-7F5D-4F2F-8F7E-6AE3EFA8E8D2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AB716883-7F5D-4F2F-8F7E-6AE3EFA8E8D2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AB716883-7F5D-4F2F-8F7E-6AE3EFA8E8D2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AB716883-7F5D-4F2F-8F7E-6AE3EFA8E8D2}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
