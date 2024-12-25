@@ -65,157 +65,193 @@ namespace LightOrm.Core.Models
 
         private static async Task LoadRelatedDataAsync(MySqlConnection connection, T instance)
         {
-            foreach (var property in typeof(T).GetProperties())
+            var properties = typeof(T).GetProperties();
+            var manyToManyProps = properties.Where(p => p.GetCustomAttribute<ManyToManyAttribute>() != null).ToList();
+            var oneToManyProps = properties.Where(p => p.GetCustomAttribute<OneToManyAttribute>() != null).ToList();
+            var oneToOneProps = properties.Where(p => p.GetCustomAttribute<OneToOneAttribute>() != null).ToList();
+            var foreignKeyProps = properties.Where(p => p.GetCustomAttribute<ForeignKeyAttribute>() != null).ToList();
+
+            // Build optimized queries for each relationship type
+            if (manyToManyProps.Any())
             {
-                // Handle ManyToMany relationships
-                var manyToManyAttr = property.GetCustomAttribute<ManyToManyAttribute>();
-                if (manyToManyAttr != null)
+                await LoadManyToManyRelationshipsAsync(connection, instance, manyToManyProps);
+            }
+
+            if (oneToManyProps.Any())
+            {
+                await LoadOneToManyRelationshipsAsync(connection, instance, oneToManyProps);
+            }
+
+            if (oneToOneProps.Any() || foreignKeyProps.Any())
+            {
+                await LoadOneToOneRelationshipsAsync(connection, instance, oneToOneProps, foreignKeyProps);
+            }
+        }
+
+        private static async Task LoadManyToManyRelationshipsAsync(MySqlConnection connection, T instance, IEnumerable<PropertyInfo> properties)
+        {
+            foreach (var property in properties)
+            {
+                var attr = property.GetCustomAttribute<ManyToManyAttribute>();
+                var relatedType = attr.RelatedType;
+                
+                // Optimized query with JOIN
+                string query = $@"
+                    SELECT r.*, a.*
+                    FROM {attr.AssociationTable} a
+                    JOIN {GetTableNameFromType(relatedType)} r 
+                        ON r.Id = a.{attr.TargetForeignKey}
+                    WHERE a.{attr.SourceForeignKey} = @Id";
+
+                using var cmd = new MySqlCommand(query, connection);
+                cmd.Parameters.AddWithValue("@Id", instance.Id);
+
+                var relatedItems = new List<object>();
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
                 {
-                    if (connection.State != System.Data.ConnectionState.Open)
-                        await connection.OpenAsync();
-
-                    var relatedType = manyToManyAttr.RelatedType;
-                    string query = $@"
-                        SELECT r.* 
-                        FROM {manyToManyAttr.AssociationTable} a
-                        JOIN {GetTableNameFromType(relatedType)} r ON r.Id = a.{manyToManyAttr.TargetForeignKey}
-                        WHERE a.{manyToManyAttr.SourceForeignKey} = @Id";
-
-                    using var cmd = new MySqlCommand(query, connection);
-                    cmd.Parameters.AddWithValue("@Id", instance.Id);
-
-                    var relatedItems = new List<object>();
-                    using (var reader = await cmd.ExecuteReaderAsync() as MySqlDataReader)
-                    {
-                        while (await reader.ReadAsync())
-                        {
-                            var relatedInstance = Activator.CreateInstance(relatedType);
-                            foreach (var relatedProperty in relatedType.GetProperties())
-                            {
-                                var relatedColumnAttr = relatedProperty.GetCustomAttribute<ColumnAttribute>();
-                                if (relatedColumnAttr != null)
-                                {
-                                    string columnName = relatedColumnAttr.Name;
-                                    if (!reader.IsDBNull(reader.GetOrdinal(columnName)))
-                                    {
-                                        object value = reader[columnName];
-                                        if (relatedProperty.CanWrite)
-                                        {
-                                            object convertedValue = Convert.ChangeType(value,
-                                                Nullable.GetUnderlyingType(relatedProperty.PropertyType) ?? relatedProperty.PropertyType);
-                                            relatedProperty.SetValue(relatedInstance, convertedValue);
-                                        }
-                                    }
-                                }
-                            }
-                            relatedItems.Add(relatedInstance);
-                        }
-                    }
-
-                    if (property.CanWrite)
-                    {
-                        var arrayType = property.PropertyType;
-                        var array = Array.CreateInstance(arrayType.GetElementType(), relatedItems.Count);
-                        for (int i = 0; i < relatedItems.Count; i++)
-                        {
-                            array.SetValue(relatedItems[i], i);
-                        }
-                        property.SetValue(instance, array);
-                    }
+                    var relatedInstance = Activator.CreateInstance(relatedType);
+                    PopulateInstance(reader, relatedInstance as IModel);
+                    relatedItems.Add(relatedInstance);
                 }
 
-                // Handle OneToMany relationships
-                var oneToManyAttr = property.GetCustomAttribute<OneToManyAttribute>();
-                if (oneToManyAttr != null)
+                if (property.CanWrite)
                 {
-                    if (connection.State != System.Data.ConnectionState.Open)
-                        await connection.OpenAsync();
-
-                    var relatedType = oneToManyAttr.RelatedType;
-                    string query = $"SELECT * FROM {GetTableNameFromType(relatedType)} WHERE {oneToManyAttr.ForeignKeyProperty} = @Id";
-                    
-                    using var cmd = new MySqlCommand(query, connection);
-                    cmd.Parameters.AddWithValue("@Id", instance.Id);
-
-                    var relatedItems = new List<object>();
-                    using (var reader = await cmd.ExecuteReaderAsync() as MySqlDataReader)
+                    var arrayType = property.PropertyType;
+                    var array = Array.CreateInstance(arrayType.GetElementType(), relatedItems.Count);
+                    for (int i = 0; i < relatedItems.Count; i++)
                     {
-                        while (await reader.ReadAsync())
-                        {
-                            var relatedInstance = Activator.CreateInstance(relatedType);
-                            foreach (var relatedProperty in relatedType.GetProperties())
-                            {
-                                var relatedColumnAttr = relatedProperty.GetCustomAttribute<ColumnAttribute>();
-                                if (relatedColumnAttr != null)
-                                {
-                                    string columnName = relatedColumnAttr.Name;
-                                    if (!reader.IsDBNull(reader.GetOrdinal(columnName)))
-                                    {
-                                        object value = reader[columnName];
-                                        if (relatedProperty.CanWrite)
-                                        {
-                                            object convertedValue = Convert.ChangeType(value,
-                                                Nullable.GetUnderlyingType(relatedProperty.PropertyType) ?? relatedProperty.PropertyType);
-                                            relatedProperty.SetValue(relatedInstance, convertedValue);
-                                        }
-                                    }
-                                }
-                            }
-                            relatedItems.Add(relatedInstance);
-                        }
+                        array.SetValue(relatedItems[i], i);
                     }
+                    property.SetValue(instance, array);
+                }
+            }
+        }
 
-                    if (property.CanWrite)
-                    {
-                        var arrayType = property.PropertyType;
-                        var array = Array.CreateInstance(arrayType.GetElementType(), relatedItems.Count);
-                        for (int i = 0; i < relatedItems.Count; i++)
-                        {
-                            array.SetValue(relatedItems[i], i);
-                        }
-                        property.SetValue(instance, array);
-                    }
+        private static async Task LoadOneToManyRelationshipsAsync(MySqlConnection connection, T instance, IEnumerable<PropertyInfo> properties)
+        {
+            foreach (var property in properties)
+            {
+                var attr = property.GetCustomAttribute<OneToManyAttribute>();
+                var relatedType = attr.RelatedType;
+
+                // Optimized query
+                string query = $@"
+                    SELECT *
+                    FROM {GetTableNameFromType(relatedType)}
+                    WHERE {attr.ForeignKeyProperty} = @Id";
+
+                using var cmd = new MySqlCommand(query, connection);
+                cmd.Parameters.AddWithValue("@Id", instance.Id);
+
+                var relatedItems = new List<object>();
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var relatedInstance = Activator.CreateInstance(relatedType);
+                    PopulateInstance(reader, relatedInstance as IModel);
+                    relatedItems.Add(relatedInstance);
                 }
 
-                // Handle OneToOne and ForeignKey relationships
-                var oneToOneAttr = property.GetCustomAttribute<OneToOneAttribute>();
-                var foreignKeyAttr = property.GetCustomAttribute<ForeignKeyAttribute>();
-
-                if (oneToOneAttr != null || foreignKeyAttr != null)
+                if (property.CanWrite)
                 {
-                    if (oneToOneAttr != null)
+                    var arrayType = property.PropertyType;
+                    var array = Array.CreateInstance(arrayType.GetElementType(), relatedItems.Count);
+                    for (int i = 0; i < relatedItems.Count; i++)
                     {
-                        // For OneToOne navigation property, get the foreign key property
-                        var foreignKeyProperty = typeof(T).GetProperty(oneToOneAttr.ForeignKeyProperty);
-                        if (foreignKeyProperty == null)
-                        {
-                            throw new InvalidOperationException($"Foreign key property {oneToOneAttr.ForeignKeyProperty} not found for {property.Name}");
-                        }
-                        var foreignKeyValue = foreignKeyProperty.GetValue(instance);
-                        if (foreignKeyValue != null)
-                        {
-                            await LoadRelatedEntityAsync(connection, instance, property, oneToOneAttr.RelatedType, foreignKeyValue);
-                        }
+                        array.SetValue(relatedItems[i], i);
                     }
-                    else if (foreignKeyAttr != null)
+                    property.SetValue(instance, array);
+                }
+            }
+        }
+
+        private static async Task LoadOneToOneRelationshipsAsync(MySqlConnection connection, T instance, IEnumerable<PropertyInfo> oneToOneProps, IEnumerable<PropertyInfo> foreignKeyProps)
+        {
+            // Build a single query for all one-to-one relationships
+            var queries = new List<string>();
+            var parameters = new Dictionary<string, object>();
+
+            foreach (var property in oneToOneProps)
+            {
+                var attr = property.GetCustomAttribute<OneToOneAttribute>();
+                var foreignKeyProperty = typeof(T).GetProperty(attr.ForeignKeyProperty);
+                if (foreignKeyProperty != null)
+                {
+                    var foreignKeyValue = foreignKeyProperty.GetValue(instance);
+                    if (foreignKeyValue != null)
                     {
-                        // For foreign key property, get the navigation property
-                        var navigationPropertyName = property.Name.Replace("Id", "");
-                        var navigationProperty = typeof(T).GetProperty(navigationPropertyName);
-                        if (navigationProperty != null)
+                        var paramName = $"@Id_{property.Name}";
+                        queries.Add($@"
+                            SELECT *
+                            FROM {GetTableNameFromType(attr.RelatedType)}
+                            WHERE Id = {paramName}");
+                        parameters.Add(paramName, foreignKeyValue);
+                    }
+                }
+            }
+
+            foreach (var property in foreignKeyProps)
+            {
+                var attr = property.GetCustomAttribute<ForeignKeyAttribute>();
+                var navigationPropertyName = property.Name.Replace("Id", "");
+                var navigationProperty = typeof(T).GetProperty(navigationPropertyName);
+                if (navigationProperty != null)
+                {
+                    var foreignKeyValue = property.GetValue(instance);
+                    if (foreignKeyValue != null)
+                    {
+                        var paramName = $"@Id_{property.Name}";
+                        queries.Add($@"
+                            SELECT *
+                            FROM {attr.ReferenceTable}
+                            WHERE Id = {paramName}");
+                        parameters.Add(paramName, foreignKeyValue);
+                    }
+                }
+            }
+
+            if (queries.Count > 0)
+            {
+                string combinedQuery = string.Join(";\n", queries);
+                using var cmd = new MySqlCommand(combinedQuery, connection);
+                foreach (var param in parameters)
+                {
+                    cmd.Parameters.AddWithValue(param.Key, param.Value);
+                }
+
+                using var reader = await cmd.ExecuteReaderAsync();
+                int queryIndex = 0;
+
+                do
+                {
+                    if (await reader.ReadAsync())
+                    {
+                        if (queryIndex < oneToOneProps.Count())
                         {
-                            var foreignKeyValue = property.GetValue(instance);
-                            if (foreignKeyValue != null)
+                            var property = oneToOneProps.ElementAt(queryIndex);
+                            var attr = property.GetCustomAttribute<OneToOneAttribute>();
+                            var relatedInstance = Activator.CreateInstance(attr.RelatedType);
+                            PopulateInstance(reader, relatedInstance as IModel);
+                            property.SetValue(instance, relatedInstance);
+                        }
+                        else
+                        {
+                            var property = foreignKeyProps.ElementAt(queryIndex - oneToOneProps.Count());
+                            var navigationPropertyName = property.Name.Replace("Id", "");
+                            var navigationProperty = typeof(T).GetProperty(navigationPropertyName);
+                            var attr = property.GetCustomAttribute<ForeignKeyAttribute>();
+                            var relatedType = GetModelTypeByTableName(attr.ReferenceTable);
+                            if (relatedType != null && navigationProperty != null)
                             {
-                                var relatedType = GetModelTypeByTableName(foreignKeyAttr.ReferenceTable);
-                                if (relatedType != null)
-                                {
-                                    await LoadRelatedEntityAsync(connection, instance, navigationProperty, relatedType, foreignKeyValue);
-                                }
+                                var relatedInstance = Activator.CreateInstance(relatedType);
+                                PopulateInstance(reader, relatedInstance as IModel);
+                                navigationProperty.SetValue(instance, relatedInstance);
                             }
                         }
                     }
-                }
+                    queryIndex++;
+                } while (await reader.NextResultAsync());
             }
         }
 
@@ -242,7 +278,7 @@ namespace LightOrm.Core.Models
             return null;
         }
 
-        protected static void PopulateInstance(MySqlDataReader reader, IModel instance)
+        protected static void PopulateInstance(System.Data.Common.DbDataReader reader, IModel instance)
         {
             foreach (var property in instance.GetType().GetProperties())
             {
@@ -374,10 +410,25 @@ namespace LightOrm.Core.Models
                 }
             }
 
-            string sql = $"CREATE TABLE IF NOT EXISTS {TableName} ({string.Join(", ", columns)}";
-            if (foreignKeys.Count > 0)
-                sql += $", {string.Join(", ", foreignKeys)}";
-            sql += ");";
+            var indexes = new List<string>();
+
+            // Add indexes for foreign key columns
+            foreach (var property in typeof(T).GetProperties())
+            {
+                var foreignKeyAttr = property.GetCustomAttribute<ForeignKeyAttribute>();
+                var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
+                if (foreignKeyAttr != null && columnAttr != null)
+                {
+                    indexes.Add($"INDEX idx_{columnAttr.Name} ({columnAttr.Name})");
+                }
+            }
+
+            string sql = $@"
+                CREATE TABLE IF NOT EXISTS {TableName} (
+                    {string.Join(",\n    ", columns)}
+                    {(foreignKeys.Any() ? ",\n    " + string.Join(",\n    ", foreignKeys) : "")}
+                    {(indexes.Any() ? ",\n    " + string.Join(",\n    ", indexes) : "")}
+                );";
 
             return sql;
         }
