@@ -44,7 +44,7 @@ namespace LightOrm.Core.Database
                     Password = password,
                     Port = UInt32.Parse(port),
                     Pooling = pooling,
-                    SslMode = useSsl ? MySqlSslMode.Preferred : MySqlSslMode.None
+                    SslMode = useSsl ? MySqlSslMode.Preferred : MySqlSslMode.Disabled
                 };
 
                 _connectionString = builder.ConnectionString;

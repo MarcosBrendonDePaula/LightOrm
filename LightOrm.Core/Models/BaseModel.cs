@@ -21,10 +21,10 @@ namespace LightOrm.Core.Models
         [Column("Id", isPrimaryKey: true, autoIncrement: true)]
         public int Id { get; set; }
 
-        [Column("CreatedAt")]
+        [Column("CreatedAt", isNullable: false)]
         public DateTime CreatedAt { get; set; }
 
-        [Column("UpdatedAt")]
+        [Column("UpdatedAt", isNullable: false)]
         public DateTime UpdatedAt { get; set; }
 
         [Column("__hash_v", length: 64)]
@@ -97,8 +97,35 @@ namespace LightOrm.Core.Models
                             object value = reader[columnName];
                             if (relatedProperty.CanWrite)
                             {
-                                object convertedValue = Convert.ChangeType(value,
-                                    Nullable.GetUnderlyingType(relatedProperty.PropertyType) ?? relatedProperty.PropertyType);
+                                object convertedValue;
+                                var targetType = Nullable.GetUnderlyingType(relatedProperty.PropertyType) ?? relatedProperty.PropertyType;
+
+                                // Special handling for DateTime values from MySQL
+                                if (targetType == typeof(DateTime))
+                                {
+                                    if (value is DateTime dateValue)
+                                    {
+                                        // Convert MySQL timestamp to local time
+                                        convertedValue = DateTime.SpecifyKind(dateValue, DateTimeKind.Local);
+                                    }
+                                    else if (value is MySql.Data.Types.MySqlDateTime mySqlDateTime)
+                                    {
+                                        // Handle MySqlDateTime type
+                                        convertedValue = new DateTime(
+                                            mySqlDateTime.Year, mySqlDateTime.Month, mySqlDateTime.Day,
+                                            mySqlDateTime.Hour, mySqlDateTime.Minute, mySqlDateTime.Second,
+                                            DateTimeKind.Local);
+                                    }
+                                    else
+                                    {
+                                        // Try standard conversion as fallback
+                                        convertedValue = Convert.ChangeType(value, targetType);
+                                    }
+                                }
+                                else
+                                {
+                                    convertedValue = Convert.ChangeType(value, targetType);
+                                }
                                 relatedProperty.SetValue(relatedInstance, convertedValue);
                             }
                         }
@@ -336,9 +363,35 @@ namespace LightOrm.Core.Models
                         object value = reader[columnName];
                         if (property.CanWrite)
                         {
-                            object convertedValue = Convert.ChangeType(
-                                value, 
-                                Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType);
+                            object convertedValue;
+                            var targetType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+
+                            // Special handling for DateTime values from MySQL
+                            if (targetType == typeof(DateTime))
+                            {
+                                if (value is DateTime dateValue)
+                                {
+                                    // Convert MySQL timestamp to local time
+                                    convertedValue = DateTime.SpecifyKind(dateValue, DateTimeKind.Local);
+                                }
+                                else if (value is MySql.Data.Types.MySqlDateTime mySqlDateTime)
+                                {
+                                    // Handle MySqlDateTime type
+                                    convertedValue = new DateTime(
+                                        mySqlDateTime.Year, mySqlDateTime.Month, mySqlDateTime.Day,
+                                        mySqlDateTime.Hour, mySqlDateTime.Minute, mySqlDateTime.Second,
+                                        DateTimeKind.Local);
+                                }
+                                else
+                                {
+                                    // Try standard conversion as fallback
+                                    convertedValue = Convert.ChangeType(value, targetType);
+                                }
+                            }
+                            else
+                            {
+                                convertedValue = Convert.ChangeType(value, targetType);
+                            }
                             property.SetValue(instance, convertedValue);
                         }
                     }
@@ -346,22 +399,32 @@ namespace LightOrm.Core.Models
             }
         }
 
-        private (string columns, string parameters) GetColumnAndParameterLists()
+        private string GenerateInsertSql()
         {
             var columnNames = new List<string>();
-            var parameterNames = new List<string>();
+            var values = new List<string>();
 
             foreach (var property in typeof(T).GetProperties())
             {
                 var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
-                if (columnAttr != null && !columnAttr.AutoIncrement)
+                if (columnAttr != null && !columnAttr.AutoIncrement && 
+                    property.Name != nameof(CreatedAt) && property.Name != nameof(UpdatedAt))
                 {
                     columnNames.Add(columnAttr.Name);
-                    parameterNames.Add($"@{columnAttr.Name}");
+                    values.Add($"@{columnAttr.Name}");
                 }
             }
 
-            return (string.Join(", ", columnNames), string.Join(", ", parameterNames));
+            // Add timestamp columns
+            columnNames.Add("CreatedAt");
+            columnNames.Add("UpdatedAt");
+            values.Add("CURRENT_TIMESTAMP");
+            values.Add("CURRENT_TIMESTAMP");
+
+            return $@"
+                INSERT INTO {TableName} ({string.Join(", ", columnNames)}) 
+                VALUES ({string.Join(", ", values)});
+                SELECT LAST_INSERT_ID();";
         }
 
         private (string setClause, object primaryKeyValue) GetUpdateClauseAndPrimaryKeyValue(string keyColumn)
@@ -378,12 +441,17 @@ namespace LightOrm.Core.Models
                     {
                         primaryKeyValue = property.GetValue(this);
                     }
-                    else if (!columnAttr.AutoIncrement)
+                    else if (!columnAttr.AutoIncrement && 
+                            property.Name != nameof(CreatedAt) && 
+                            property.Name != nameof(UpdatedAt))
                     {
                         setClauseList.Add($"{columnAttr.Name} = @{columnAttr.Name}");
                     }
                 }
             }
+
+            // Add UpdatedAt
+            setClauseList.Add("UpdatedAt = CURRENT_TIMESTAMP");
 
             return (string.Join(", ", setClauseList), primaryKeyValue);
         }
@@ -393,12 +461,17 @@ namespace LightOrm.Core.Models
             foreach (var property in typeof(T).GetProperties())
             {
                 var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
-                if (columnAttr != null && !columnAttr.AutoIncrement)
+                if (columnAttr != null && !columnAttr.AutoIncrement && 
+                    property.Name != nameof(CreatedAt) && property.Name != nameof(UpdatedAt))
                 {
                     string parameterName = $"@{columnAttr.Name}";
                     if (!cmd.Parameters.Contains(parameterName))
                     {
                         object value = property.GetValue(this);
+                        if (value == null && columnAttr.DefaultValue != null)
+                        {
+                            value = columnAttr.DefaultValue;
+                        }
                         cmd.Parameters.AddWithValue(parameterName, value ?? DBNull.Value);
                     }
                 }
@@ -430,12 +503,16 @@ namespace LightOrm.Core.Models
         private string GenerateCreateTableSql()
         {
             var columns = new List<string>();
-            var foreignKeys = new List<string>();
+            var constraints = new List<string>();
+
+            // Add CreatedAt and UpdatedAt first with special handling
+            columns.Add("CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP");
+            columns.Add("UpdatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
 
             foreach (var property in typeof(T).GetProperties())
             {
                 var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
-                if (columnAttr != null)
+                if (columnAttr != null && property.Name != nameof(CreatedAt) && property.Name != nameof(UpdatedAt))
                 {
                     string sqlType = GetSqlType(property.PropertyType, columnAttr);
                     string columnDef = $"{columnAttr.Name} {sqlType}";
@@ -447,32 +524,42 @@ namespace LightOrm.Core.Models
 
                     columns.Add(columnDef);
 
+                    // Add unique constraint
+                    if (columnAttr.IsUnique)
+                    {
+                        constraints.Add($"UNIQUE KEY uk_{columnAttr.Name} ({columnAttr.Name})");
+                    }
+
+                    // Add index
+                    if (columnAttr.HasIndex)
+                    {
+                        constraints.Add($"INDEX idx_{columnAttr.Name} ({columnAttr.Name})");
+                    }
+
+                    // Add check constraint
+                    if (!string.IsNullOrEmpty(columnAttr.CheckConstraint))
+                    {
+                        constraints.Add($"CHECK ({columnAttr.CheckConstraint})");
+                    }
+                    else if (columnAttr.EnumValues?.Length > 0)
+                    {
+                        var values = string.Join("','", columnAttr.EnumValues);
+                        constraints.Add($"CHECK ({columnAttr.Name} IN ('{values}'))");
+                    }
+
+                    // Add foreign key
                     var foreignKeyAttr = property.GetCustomAttribute<ForeignKeyAttribute>();
                     if (foreignKeyAttr != null)
                     {
-                        foreignKeys.Add($"FOREIGN KEY ({columnAttr.Name}) REFERENCES {foreignKeyAttr.ReferenceTable}({foreignKeyAttr.ReferenceColumn})");
+                        constraints.Add($"FOREIGN KEY ({columnAttr.Name}) REFERENCES {foreignKeyAttr.ReferenceTable}({foreignKeyAttr.ReferenceColumn})");
                     }
-                }
-            }
-
-            var indexes = new List<string>();
-
-            // Add indexes for foreign key columns
-            foreach (var property in typeof(T).GetProperties())
-            {
-                var foreignKeyAttr = property.GetCustomAttribute<ForeignKeyAttribute>();
-                var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
-                if (foreignKeyAttr != null && columnAttr != null)
-                {
-                    indexes.Add($"INDEX idx_{columnAttr.Name} ({columnAttr.Name})");
                 }
             }
 
             string sql = $@"
                 CREATE TABLE IF NOT EXISTS {TableName} (
                     {string.Join(",\n    ", columns)}
-                    {(foreignKeys.Any() ? ",\n    " + string.Join(",\n    ", foreignKeys) : "")}
-                    {(indexes.Any() ? ",\n    " + string.Join(",\n    ", indexes) : "")}
+                    {(constraints.Any() ? ",\n    " + string.Join(",\n    ", constraints) : "")}
                 );";
 
             return sql;
@@ -490,20 +577,41 @@ namespace LightOrm.Core.Models
                 Type t when t == typeof(string) => $"VARCHAR({(columnAttr.Length > 0 ? columnAttr.Length : 255)})",
                 Type t when t == typeof(bool) => "BOOLEAN",
                 Type t when t == typeof(DateTime) => "DATETIME",
-                Type t when t == typeof(decimal) => "DECIMAL(18,2)",
+                Type t when t == typeof(decimal) => $"DECIMAL({columnAttr.Precision},{columnAttr.Scale})",
                 Type t when t == typeof(float) => "FLOAT",
                 Type t when t == typeof(double) => "DOUBLE",
                 _ => throw new NotSupportedException($"Type {type.Name} is not supported for SQL mapping.")
             };
 
-            // If the type is nullable, make the column nullable
-            if (Nullable.GetUnderlyingType(type) != null)
+            // Handle nullability
+            if (columnAttr.IsNullable || Nullable.GetUnderlyingType(type) != null)
             {
                 sqlType += " NULL";
             }
             else
             {
                 sqlType += " NOT NULL";
+            }
+
+            // Handle default value
+            if (columnAttr.DefaultValue != null)
+            {
+                string defaultValueStr = columnAttr.DefaultValue switch
+                {
+                    string s when s == "CURRENT_TIMESTAMP" => "CURRENT_TIMESTAMP",
+                    string s => $"'{s}'",
+                    DateTime dt => $"'{dt:yyyy-MM-dd HH:mm:ss}'",
+                    bool b => b ? "1" : "0",
+                    decimal d => d.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    float f => f.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    double d => d.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    _ => columnAttr.DefaultValue.ToString()
+                };
+                sqlType += $" DEFAULT {defaultValueStr}";
+            }
+            else if (!columnAttr.IsNullable && underlyingType == typeof(string))
+            {
+                sqlType += " DEFAULT ''";
             }
 
             return sqlType;
@@ -513,17 +621,13 @@ namespace LightOrm.Core.Models
         {
             if (Id == 0)
             {
-                CreatedAt = DateTime.UtcNow;
-                UpdatedAt = CreatedAt;
                 return await InsertAsync(connection);
             }
             else
             {
-                UpdatedAt = DateTime.UtcNow;
                 return await UpdateAsync(connection);
             }
         }
-
 
         public static async Task<T> FindByIdAsync(MySqlConnection connection, int id, bool includeRelated = false)
         {
@@ -654,11 +758,7 @@ namespace LightOrm.Core.Models
             try
             {
                 UpdateHash(); // Generate initial hash
-                var (columns, parameters) = GetColumnAndParameterLists();
-                string query = $@"
-                    INSERT INTO {TableName} ({columns}) 
-                    VALUES ({parameters});
-                    SELECT LAST_INSERT_ID();";
+                string query = GenerateInsertSql();
 
                 using var cmd = new MySqlCommand(query, connection);
                 cmd.Transaction = transaction;

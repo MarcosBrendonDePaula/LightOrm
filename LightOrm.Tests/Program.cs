@@ -4,9 +4,9 @@ using MySql.Data.MySqlClient;
 
 namespace LightOrm.Tests
 {
-    class Program
+    public class Program
     {
-        static async Task Main(string[] args)
+        public static async Task Main(string[] args)
         {
             var builder = new MySqlConnectionStringBuilder
             {
@@ -20,15 +20,28 @@ namespace LightOrm.Tests
             using var connection = new MySqlConnection(builder.ConnectionString);
             await connection.OpenAsync();
 
-            // Run relationship tests
-            Console.WriteLine("Running Relationship Tests...");
-            var relationshipTests = new RelationshipTests(builder.ConnectionString);
-            await relationshipTests.RunAllTests();
+            try
+            {
+                // Run configuration tests
+                Console.WriteLine("\nRunning Configuration Tests...");
+                var configurationTests = new ConfigurationTests(builder.ConnectionString);
+                await configurationTests.RunAllTests();
 
-            // Run performance tests
-            Console.WriteLine("\nRunning Performance Tests...");
-            var performanceTests = new PerformanceTests(connection);
-            await performanceTests.RunAllTests();
+                // Run relationship tests
+                Console.WriteLine("\nRunning Relationship Tests...");
+                var relationshipTests = new RelationshipTests(builder.ConnectionString);
+                await relationshipTests.RunAllTests();
+
+                // Run performance tests
+                Console.WriteLine("\nRunning Performance Tests...");
+                var performanceTests = new PerformanceTests(connection);
+                await performanceTests.RunAllTests();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"\nError: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
 
             Console.WriteLine("\nPress any key to exit...");
             Console.ReadKey();

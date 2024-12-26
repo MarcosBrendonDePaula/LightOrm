@@ -1,7 +1,7 @@
 # 🚀 LightOrm
 
 <p align="center">
-  <img src="docs/assets/image.png" alt="LightOrm Logo" width="600">
+  <img src="docs/assets/image.png" alt="LightOrm Logo" width="800" style="max-width: 100%;">
 </p>
 
 A high-performance, lightweight ORM (Object-Relational Mapping) library for .NET and Unity, providing seamless MySQL database integration with advanced features like intelligent caching, relationship mapping, and async support.
@@ -24,6 +24,13 @@ A high-performance, lightweight ORM (Object-Relational Mapping) library for .NET
   - Many-to-Many relationships
   - Self-referencing relationships
   - Custom association tables
+- 📊 **Advanced Column Configuration**
+  - Automatic timestamps (CreatedAt/UpdatedAt)
+  - Enum-like columns with validation
+  - Check constraints
+  - Default values
+  - Unique constraints and indexes
+  - Custom precision for numeric types
 - 🎮 **Cross-Platform**
   - Works with standard .NET applications
   - Seamless Unity integration
@@ -72,11 +79,47 @@ public class UserModel : BaseModel<UserModel>
 {
     public override string TableName => "users";
 
-    [Column("name", length: 100)]
+    [Column("name", length: 100, isNullable: false)]
     public string Name { get; set; }
 
-    [Column("email", length: 255)]
+    [Column("email", length: 255, isNullable: false, isUnique: true, hasIndex: true)]
     public string Email { get; set; }
+
+    // Automatic timestamps
+    [Column("created_at")]
+    public DateTime CreatedAt { get; set; }
+
+    [Column("updated_at")]
+    public DateTime UpdatedAt { get; set; }
+}
+```
+
+### Advanced Column Configuration
+
+```csharp
+public class ProductModel : BaseModel<ProductModel>
+{
+    public override string TableName => "products";
+
+    // Enum-like column with validation
+    [Column("status", enumValues: new[] { "active", "inactive", "pending" })]
+    public string Status { get; set; }
+
+    // Decimal with precision
+    [Column("price", precision: 10, scale: 2, defaultValue: 0.0)]
+    public decimal Price { get; set; }
+
+    // Integer with check constraint
+    [Column("stock", checkConstraint: "stock >= 0", defaultValue: 0)]
+    public int Stock { get; set; }
+
+    // Boolean with default
+    [Column("is_featured", defaultValue: false)]
+    public bool IsFeatured { get; set; }
+
+    // Nullable datetime
+    [Column("last_sale", isNullable: true)]
+    public DateTime? LastSale { get; set; }
 }
 ```
 
@@ -191,6 +234,7 @@ await user.SaveAsync(connection); // Automatically updates cache
 The project includes comprehensive tests covering:
 - Basic CRUD operations
 - Relationship scenarios
+- Column configurations and constraints
 - Cache performance
 - Edge cases
 - Stress testing

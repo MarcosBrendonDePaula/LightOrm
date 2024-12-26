@@ -62,25 +62,30 @@ namespace LightOrm.Tests
                 await cmd.ExecuteNonQueryAsync();
             }
 
-            // Create tables without foreign keys first
+            // Create tables in correct order to handle circular references
+            // First, create tables without foreign keys
             await new AddressModel().EnsureTableExistsAsync(_connection);
             await new CourseModel().EnsureTableExistsAsync(_connection);
             await new ProjectModel().EnsureTableExistsAsync(_connection);
 
-            // Create tables with foreign keys but allow NULL for circular references
+            // Then create tables with circular references, but without constraints first
             using (var cmd = new MySqlCommand(@"
                 CREATE TABLE IF NOT EXISTS employees (
                     Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                     first_name VARCHAR(50) NOT NULL,
                     last_name VARCHAR(50) NOT NULL,
                     email VARCHAR(255) NOT NULL,
-                    hire_date DATETIME NOT NULL,
-                    salary DECIMAL(18,2) NOT NULL,
+                    hire_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    salary DECIMAL(18,2) NOT NULL DEFAULT 0.0,
+                    status VARCHAR(20) NOT NULL DEFAULT 'active',
+                    is_fulltime BOOLEAN NOT NULL DEFAULT true,
                     department_id INT NULL,
                     supervisor_id INT NULL,
+                    last_promotion_date DATETIME NULL,
+                    notes VARCHAR(500) NULL DEFAULT '',
                     __hash_v VARCHAR(64),
-                    CreatedAt DATETIME NOT NULL,
-                    UpdatedAt DATETIME NOT NULL
+                    CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UpdatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 )", _connection))
             {
                 await cmd.ExecuteNonQueryAsync();
@@ -90,12 +95,16 @@ namespace LightOrm.Tests
                 CREATE TABLE IF NOT EXISTS departments (
                     Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                     name VARCHAR(100) NOT NULL,
-                    budget DECIMAL(18,2) NOT NULL,
+                    code VARCHAR(20) NOT NULL,
+                    budget DECIMAL(18,2) NOT NULL DEFAULT 0.0,
                     location VARCHAR(100) NOT NULL,
+                    description VARCHAR(500) NULL DEFAULT '',
+                    is_active BOOLEAN NOT NULL DEFAULT true,
+                    established_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     head_employee_id INT NULL,
                     __hash_v VARCHAR(64),
-                    CreatedAt DATETIME NOT NULL,
-                    UpdatedAt DATETIME NOT NULL
+                    CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UpdatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 )", _connection))
             {
                 await cmd.ExecuteNonQueryAsync();
@@ -105,26 +114,7 @@ namespace LightOrm.Tests
             await new StudentModel().EnsureTableExistsAsync(_connection);
             await new AssignmentModel().EnsureTableExistsAsync(_connection);
             await new StudentCourseModel().EnsureTableExistsAsync(_connection);
-
-            // Create employee_projects table with __hash_v
-            using (var cmd = new MySqlCommand(@"
-                CREATE TABLE IF NOT EXISTS employee_projects (
-                    Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-                    employee_id INT NOT NULL,
-                    project_id INT NOT NULL,
-                    role VARCHAR(100) NOT NULL,
-                    hours_allocated INT NOT NULL,
-                    start_date DATETIME NOT NULL,
-                    end_date DATETIME NOT NULL,
-                    __hash_v VARCHAR(64),
-                    CreatedAt DATETIME NOT NULL,
-                    UpdatedAt DATETIME NOT NULL,
-                    FOREIGN KEY (employee_id) REFERENCES employees(Id),
-                    FOREIGN KEY (project_id) REFERENCES projects(Id)
-                )", _connection))
-            {
-                await cmd.ExecuteNonQueryAsync();
-            }
+            await new EmployeeProjectModel().EnsureTableExistsAsync(_connection);
 
             // Add foreign key constraints
             var alterTableCommands = new[]
@@ -153,7 +143,8 @@ namespace LightOrm.Tests
                 Street = "123 Main St",
                 City = "Springfield",
                 State = "IL",
-                PostalCode = "62701"
+                PostalCode = "62701",
+                Country = "Brazil"  // Add the required country field
             };
             await address.SaveAsync(_connection);
             Console.WriteLine($"Created address: {address.Street}, {address.City}");
