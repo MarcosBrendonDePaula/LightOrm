@@ -1,5 +1,9 @@
-theme: jekyll-theme-minimal
-title: LightOrm Documentation
-description: A lightweight ORM for C# and Unity projects.
-
+remote_theme: pages-themes/cayman@v0.2.0
+plugins:
+- jekyll-remote-theme
+title: LightOrm
+description: Um ORM leve e eficiente para C# e Unity
+show_downloads: true
+github:
+  repository_url: https://github.com/MarcosBrendonDePaula/LightOrm
 
