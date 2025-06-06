@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using MySql.Data.MySqlClient;
 using LightOrm.Core.Attributes;
+using LightOrm.Core.Utilities;
 
 namespace LightOrm.Core.Models
 {
@@ -41,9 +42,9 @@ namespace LightOrm.Core.Models
             if (await reader.ReadAsync())
             {
                 var relatedInstance = Activator.CreateInstance(relatedType);
-                foreach (var relatedProperty in relatedType.GetProperties())
+                foreach (var relatedProperty in TypeMetadataCache.GetProperties(relatedType))
                 {
-                    var relatedColumnAttr = relatedProperty.GetCustomAttribute<ColumnAttribute>();
+                    var relatedColumnAttr = TypeMetadataCache.GetColumnAttribute(relatedProperty);
                     if (relatedColumnAttr != null)
                     {
                         string columnName = relatedColumnAttr.Name;
@@ -65,11 +66,11 @@ namespace LightOrm.Core.Models
 
         private static async Task LoadRelatedDataAsync(MySqlConnection connection, T instance)
         {
-            var properties = typeof(T).GetProperties();
-            var manyToManyProps = properties.Where(p => p.GetCustomAttribute<ManyToManyAttribute>() != null).ToList();
-            var oneToManyProps = properties.Where(p => p.GetCustomAttribute<OneToManyAttribute>() != null).ToList();
-            var oneToOneProps = properties.Where(p => p.GetCustomAttribute<OneToOneAttribute>() != null).ToList();
-            var foreignKeyProps = properties.Where(p => p.GetCustomAttribute<ForeignKeyAttribute>() != null).ToList();
+            var properties = TypeMetadataCache.GetProperties(typeof(T));
+            var manyToManyProps = properties.Where(p => TypeMetadataCache.GetManyToManyAttribute(p) != null).ToList();
+            var oneToManyProps = properties.Where(p => TypeMetadataCache.GetOneToManyAttribute(p) != null).ToList();
+            var oneToOneProps = properties.Where(p => TypeMetadataCache.GetOneToOneAttribute(p) != null).ToList();
+            var foreignKeyProps = properties.Where(p => TypeMetadataCache.GetForeignKeyAttribute(p) != null).ToList();
 
             // Build optimized queries for each relationship type
             if (manyToManyProps.Any())
@@ -92,7 +93,7 @@ namespace LightOrm.Core.Models
         {
             foreach (var property in properties)
             {
-                var attr = property.GetCustomAttribute<ManyToManyAttribute>();
+                var attr = TypeMetadataCache.GetManyToManyAttribute(property);
                 var relatedType = attr.RelatedType;
                 
                 // Optimized query with JOIN
@@ -132,7 +133,7 @@ namespace LightOrm.Core.Models
         {
             foreach (var property in properties)
             {
-                var attr = property.GetCustomAttribute<OneToManyAttribute>();
+                var attr = TypeMetadataCache.GetOneToManyAttribute(property);
                 var relatedType = attr.RelatedType;
 
                 // Optimized query
@@ -174,7 +175,7 @@ namespace LightOrm.Core.Models
 
             foreach (var property in oneToOneProps)
             {
-                var attr = property.GetCustomAttribute<OneToOneAttribute>();
+                var attr = TypeMetadataCache.GetOneToOneAttribute(property);
                 var foreignKeyProperty = typeof(T).GetProperty(attr.ForeignKeyProperty);
                 if (foreignKeyProperty != null)
                 {
@@ -193,7 +194,7 @@ namespace LightOrm.Core.Models
 
             foreach (var property in foreignKeyProps)
             {
-                var attr = property.GetCustomAttribute<ForeignKeyAttribute>();
+                var attr = TypeMetadataCache.GetForeignKeyAttribute(property);
                 var navigationPropertyName = property.Name.Replace("Id", "");
                 var navigationProperty = typeof(T).GetProperty(navigationPropertyName);
                 if (navigationProperty != null)
@@ -258,7 +259,7 @@ namespace LightOrm.Core.Models
         private static string GetTableNameFromType(Type type)
         {
             var instance = Activator.CreateInstance(type) as IModel;
-            return instance?.GetTableName() ?? throw new InvalidOperationException($"Could not get table name for type {type.Name}");
+            return $"`{instance?.GetTableName() ?? throw new InvalidOperationException($"Could not get table name for type {type.Name}")}`";
         }
 
         private static Type GetModelTypeByTableName(string tableName)
@@ -280,9 +281,9 @@ namespace LightOrm.Core.Models
 
         protected static void PopulateInstance(System.Data.Common.DbDataReader reader, IModel instance)
         {
-            foreach (var property in instance.GetType().GetProperties())
+            foreach (var property in TypeMetadataCache.GetProperties(instance.GetType()))
             {
-                var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
+                var columnAttr = TypeMetadataCache.GetColumnAttribute(property);
                 if (columnAttr != null)
                 {
                     string columnName = columnAttr.Name;
@@ -306,9 +307,9 @@ namespace LightOrm.Core.Models
             var columnNames = new List<string>();
             var parameterNames = new List<string>();
 
-            foreach (var property in typeof(T).GetProperties())
+            foreach (var property in TypeMetadataCache.GetProperties(typeof(T)))
             {
-                var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
+                var columnAttr = TypeMetadataCache.GetColumnAttribute(property);
                 if (columnAttr != null && !columnAttr.AutoIncrement)
                 {
                     columnNames.Add(columnAttr.Name);
@@ -324,9 +325,9 @@ namespace LightOrm.Core.Models
             var setClauseList = new List<string>();
             object primaryKeyValue = null;
 
-            foreach (var property in typeof(T).GetProperties())
+            foreach (var property in TypeMetadataCache.GetProperties(typeof(T)))
             {
-                var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
+                var columnAttr = TypeMetadataCache.GetColumnAttribute(property);
                 if (columnAttr != null)
                 {
                     if (columnAttr.IsPrimaryKey)
@@ -345,9 +346,9 @@ namespace LightOrm.Core.Models
 
         private void PopulateCommandParameters(MySqlCommand cmd)
         {
-            foreach (var property in typeof(T).GetProperties())
+            foreach (var property in TypeMetadataCache.GetProperties(typeof(T)))
             {
-                var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
+                var columnAttr = TypeMetadataCache.GetColumnAttribute(property);
                 if (columnAttr != null && !columnAttr.AutoIncrement)
                 {
                     string parameterName = $"@{columnAttr.Name}";
@@ -387,13 +388,13 @@ namespace LightOrm.Core.Models
             var columns = new List<string>();
             var foreignKeys = new List<string>();
 
-            foreach (var property in typeof(T).GetProperties())
+            foreach (var property in TypeMetadataCache.GetProperties(typeof(T)))
             {
-                var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
+                var columnAttr = TypeMetadataCache.GetColumnAttribute(property);
                 if (columnAttr != null)
                 {
                     string sqlType = GetSqlType(property.PropertyType, columnAttr);
-                    string columnDef = $"{columnAttr.Name} {sqlType}";
+                    string columnDef = $"`{columnAttr.Name}` {sqlType}";
 
                     if (columnAttr.IsPrimaryKey)
                         columnDef += " PRIMARY KEY";
@@ -405,7 +406,7 @@ namespace LightOrm.Core.Models
                     var foreignKeyAttr = property.GetCustomAttribute<ForeignKeyAttribute>();
                     if (foreignKeyAttr != null)
                     {
-                        foreignKeys.Add($"FOREIGN KEY ({columnAttr.Name}) REFERENCES {foreignKeyAttr.ReferenceTable}({foreignKeyAttr.ReferenceColumn})");
+                        foreignKeys.Add($"FOREIGN KEY (`{columnAttr.Name}`) REFERENCES `{foreignKeyAttr.ReferenceTable}`(`{foreignKeyAttr.ReferenceColumn}`)");
                     }
                 }
             }
@@ -413,13 +414,13 @@ namespace LightOrm.Core.Models
             var indexes = new List<string>();
 
             // Add indexes for foreign key columns
-            foreach (var property in typeof(T).GetProperties())
+            foreach (var property in TypeMetadataCache.GetProperties(typeof(T)))
             {
-                var foreignKeyAttr = property.GetCustomAttribute<ForeignKeyAttribute>();
-                var columnAttr = property.GetCustomAttribute<ColumnAttribute>();
+                var foreignKeyAttr = TypeMetadataCache.GetForeignKeyAttribute(property);
+                var columnAttr = TypeMetadataCache.GetColumnAttribute(property);
                 if (foreignKeyAttr != null && columnAttr != null)
                 {
-                    indexes.Add($"INDEX idx_{columnAttr.Name} ({columnAttr.Name})");
+                    indexes.Add($"INDEX `idx_{columnAttr.Name}` (`{columnAttr.Name}`)");
                 }
             }
 
