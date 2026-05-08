@@ -231,6 +231,61 @@ namespace LightOrm.Core.Sql
             return await cmd.ExecuteNonQueryAsync();
         }
 
+        public Task<decimal?> SumAsync(string propertyName) => ScalarAggregateAsync("SUM", propertyName);
+        public Task<decimal?> AvgAsync(string propertyName) => ScalarAggregateAsync("AVG", propertyName);
+        public Task<decimal?> MinAsync(string propertyName) => ScalarAggregateAsync("MIN", propertyName);
+        public Task<decimal?> MaxAsync(string propertyName) => ScalarAggregateAsync("MAX", propertyName);
+
+        private async Task<decimal?> ScalarAggregateAsync(string func, string propertyName)
+        {
+            await EnsureOpenAsync();
+            var col = ResolveColumnName(propertyName);
+            var (sql, parameters) = BuildSelectSql($"{func}({Q(col)})");
+            sql = StripOrderAndPaging(sql);
+
+            using var cmd = _dialect.CreateCommand(_connection);
+            cmd.CommandText = sql;
+            if (_ambientTx != null) cmd.Transaction = _ambientTx;
+            ApplyParameters(cmd, parameters);
+            var raw = await cmd.ExecuteScalarAsync();
+            if (raw == null || raw == DBNull.Value) return null;
+            try
+            {
+                return Convert.ToDecimal(raw, System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch (InvalidCastException)
+            {
+                // DateTime: converte para ticks (decimal).
+                if (raw is DateTime dt) return dt.Ticks;
+                throw;
+            }
+        }
+
+        public async Task<List<(object key, int count)>> GroupByAsync(string propertyName)
+        {
+            await EnsureOpenAsync();
+            var col = ResolveColumnName(propertyName);
+            // Tira ORDER/LIMIT do query base, depois acrescenta GROUP BY.
+            var (sql, parameters) = BuildSelectSql($"{Q(col)} AS __key, COUNT(*) AS __count");
+            sql = StripOrderAndPaging(sql);
+            sql += $" GROUP BY {Q(col)}";
+
+            using var cmd = _dialect.CreateCommand(_connection);
+            cmd.CommandText = sql;
+            if (_ambientTx != null) cmd.Transaction = _ambientTx;
+            ApplyParameters(cmd, parameters);
+
+            var result = new List<(object, int)>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var key = reader.IsDBNull(0) ? null : reader.GetValue(0);
+                var count = Convert.ToInt32(reader.GetValue(1));
+                result.Add((key, count));
+            }
+            return result;
+        }
+
         // ------- internals -------
 
         private async Task EnsureOpenAsync()
