@@ -14,6 +14,7 @@ namespace LightOrm.Core.Utilities
         private static readonly ConcurrentDictionary<PropertyInfo, OneToOneAttribute> _oneToOneAttributeCache = new ConcurrentDictionary<PropertyInfo, OneToOneAttribute>();
         private static readonly ConcurrentDictionary<PropertyInfo, ManyToManyAttribute> _manyToManyAttributeCache = new ConcurrentDictionary<PropertyInfo, ManyToManyAttribute>();
         private static readonly ConcurrentDictionary<PropertyInfo, EmbeddedAttribute> _embeddedAttributeCache = new ConcurrentDictionary<PropertyInfo, EmbeddedAttribute>();
+        private static readonly ConcurrentDictionary<PropertyInfo, VersionAttribute> _versionAttributeCache = new ConcurrentDictionary<PropertyInfo, VersionAttribute>();
 
         public static PropertyInfo[] GetProperties(Type type)
         {
@@ -48,6 +49,11 @@ namespace LightOrm.Core.Utilities
         public static EmbeddedAttribute GetEmbeddedAttribute(PropertyInfo property)
         {
             return _embeddedAttributeCache.GetOrAdd(property, p => p.GetCustomAttribute<EmbeddedAttribute>());
+        }
+
+        public static VersionAttribute GetVersionAttribute(PropertyInfo property)
+        {
+            return _versionAttributeCache.GetOrAdd(property, p => p.GetCustomAttribute<VersionAttribute>());
         }
     }
 }

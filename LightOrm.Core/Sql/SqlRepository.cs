@@ -366,6 +366,15 @@ namespace LightOrm.Core.Sql
 
         private async Task InsertWithinTxAsync(T entity, PropertyInfo idProp, DbTransaction tx)
         {
+            // Inicializa coluna [Version] em 1 se ainda estiver no default (0).
+            var versionProp = GetVersionProperty();
+            if (versionProp != null)
+            {
+                var current = versionProp.GetValue(entity);
+                if (current is int i && i == 0) versionProp.SetValue(entity, 1);
+                else if (current is long l && l == 0L) versionProp.SetValue(entity, 1L);
+            }
+
             var writableCols = WritableColumns(skipAutoIncrement: true).ToList();
             var colList = string.Join(", ", writableCols.Select(c => Q(c.col.Name)));
             var paramList = string.Join(", ", writableCols.Select(c => P(c.col.Name)));
@@ -403,17 +412,63 @@ namespace LightOrm.Core.Sql
 
         private async Task UpdateWithinTxAsync(T entity, PropertyInfo idProp, DbTransaction tx)
         {
+            var versionProp = GetVersionProperty();
+            object oldVersion = null;
+            string versionColName = null;
+
+            if (versionProp != null)
+            {
+                versionColName = TypeMetadataCache.GetColumnAttribute(versionProp).Name;
+                oldVersion = versionProp.GetValue(entity);
+                // Incrementa antes do SET; o WHERE usa oldVersion.
+                if (oldVersion is int i) versionProp.SetValue(entity, i + 1);
+                else if (oldVersion is long l) versionProp.SetValue(entity, l + 1L);
+            }
+
             var writableCols = WritableColumns(skipAutoIncrement: true)
                 .Where(c => !c.col.IsPrimaryKey)
                 .ToList();
             var setClause = string.Join(", ", writableCols.Select(c => $"{Q(c.col.Name)} = {P(c.col.Name)}"));
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
-            var sql = $"UPDATE {Q(_tableName)} SET {setClause} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
+
+            var whereClause = $"{Q(idCol.Name)} = {P(idCol.Name)}";
+            if (versionProp != null)
+                whereClause += $" AND {Q(versionColName)} = {P("__oldVersion")}";
+
+            var sql = $"UPDATE {Q(_tableName)} SET {setClause} WHERE {whereClause}";
             using var cmd = NewCommand(sql, tx);
             foreach (var (col, prop) in writableCols)
                 AddParam(cmd, col.Name, prop.GetValue(entity), prop.PropertyType);
             AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
-            await cmd.ExecuteNonQueryAsync();
+            if (versionProp != null)
+                AddParam(cmd, "__oldVersion", oldVersion, versionProp.PropertyType);
+
+            var rows = await cmd.ExecuteNonQueryAsync();
+            if (versionProp != null && rows == 0)
+            {
+                // Reverte o incremento em memória pra evitar estado inconsistente.
+                if (oldVersion is int i) versionProp.SetValue(entity, i);
+                else if (oldVersion is long l) versionProp.SetValue(entity, l);
+                throw new DbConcurrencyException(
+                    $"Conflito de versão em {typeof(T).Name} (id={idProp.GetValue(entity)}). " +
+                    $"Outra escrita modificou ou apagou a linha desde a leitura.");
+            }
+        }
+
+        private static PropertyInfo GetVersionProperty()
+        {
+            foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
+            {
+                if (TypeMetadataCache.GetVersionAttribute(prop) != null)
+                {
+                    var t = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+                    if (t != typeof(int) && t != typeof(long))
+                        throw new InvalidOperationException(
+                            $"[Version] em {typeof(T).Name}.{prop.Name} requer int ou long; recebido {t.Name}.");
+                    return prop;
+                }
+            }
+            return null;
         }
 
         private void Populate(DbDataReader reader, T instance)
