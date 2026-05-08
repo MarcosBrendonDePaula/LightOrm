@@ -1,225 +1,169 @@
 # LightOrm
 
-A lightweight ORM (Object-Relational Mapping) library that works with both Unity and standard C# applications. It provides a simple way to interact with MySQL databases using a clean, model-based approach.
+ORM leve em C# com suporte a múltiplos bancos via abstração `IRepository<T, TId>` + `IDialect`. Hoje cobre **MySQL**, **SQLite** e **MongoDB**, e funciona em aplicações .NET Standard 2.1 e Unity.
 
-## Features
+## Arquitetura
 
-- Works with both Unity and standard C# applications
-- Supports MySQL databases
-- Model-based database operations
-- Automatic table creation and schema management
-- Support for relationships (One-to-One, One-to-Many)
-- Async/await support
-- Transaction management
-- Connection pooling
+- `LightOrm.Core` — `BaseModel<T, TId>` (metadados), `IRepository<T, TId>`, atributos, `SqlRepository<T, TId>` agnóstico de provider, `IDialect`. Zero dependência de driver.
+- `LightOrm.MySql` — `MySqlDialect` + helper `DatabaseConnection` (MySql.Data).
+- `LightOrm.Sqlite` — `SqliteDialect` (Microsoft.Data.Sqlite).
+- `LightOrm.Mongo` — `MongoRepository<T, TId>` sobre `IMongoCollection` (MongoDB.Driver).
+- `LightOrm.Unity` — `DatabaseManager` MonoBehaviour para integração no Editor.
 
-## Installation
+Modelos descrevem dados via atributos; a operação CRUD vive no repositório, não no modelo.
 
-### For Standard C# Applications
+## Instalação
 
-1. Add the LightOrm.Core project to your solution
-2. Install the required NuGet package:
-   ```
-   Install-Package MySql.Data
-   ```
-3. Reference the LightOrm.Core project in your application
+Referencie o `LightOrm.Core` mais o(s) provider(s) que você precisa:
 
-### For Unity Applications
+- MySQL: `LightOrm.Core` + `LightOrm.MySql`
+- SQLite: `LightOrm.Core` + `LightOrm.Sqlite`
+- MongoDB: `LightOrm.Core` + `LightOrm.Mongo`
 
-1. Add both LightOrm.Core and LightOrm.Unity projects to your solution
-2. Copy the compiled DLLs to your Unity project's Assets/Plugins folder:
-   - LightOrm.Core.dll
-   - LightOrm.Unity.dll
-   - MySql.Data.dll
+Para Unity, copie os DLLs compilados (`LightOrm.Core.dll`, `LightOrm.Unity.dll`, `LightOrm.MySql.dll`, `MySql.Data.dll`) para `Assets/Plugins`.
 
-## Creating Your Models
-
-1. Create a model class that inherits from BaseModel<T>:
+## Definindo modelos
 
 ```csharp
-public class UserModel : BaseModel<UserModel>
+using LightOrm.Core.Models;
+using LightOrm.Core.Attributes;
+
+public class UserModel : BaseModel<UserModel, int>
 {
-    // Define the table name
     public override string TableName => "users";
 
-    // Define columns using attributes
     [Column("name", length: 100)]
     public string Name { get; set; }
 
     [Column("email", length: 255)]
     public string Email { get; set; }
 
-    [Column("age", isUnsigned: true)]
-    public int Age { get; set; }
-
-    [Column("balance", isUnsigned: true)]
-    public decimal Balance { get; set; }
-
     [Column("is_active")]
     public bool IsActive { get; set; }
 }
 ```
 
-2. Define relationships between models:
+`BaseModel<T, TId>` já fornece `Id` (genérico), `CreatedAt` e `UpdatedAt`. O segundo parâmetro define o tipo da chave: `int`/`long`/`Guid` para SQL, `string` (ObjectId) para Mongo.
+
+### Relacionamentos (SQL)
 
 ```csharp
-public class PostModel : BaseModel<PostModel>
+public class PostModel : BaseModel<PostModel, int>
 {
     public override string TableName => "posts";
 
     [Column("title", length: 200)]
     public string Title { get; set; }
 
-    [Column("content", length: 1000)]
-    public string Content { get; set; }
-
-    // Foreign key to User
     [Column("user_id")]
     [ForeignKey("users")]
     public int UserId { get; set; }
 
-    // One-to-one relationship with User
     [OneToOne("UserId", typeof(UserModel))]
     public UserModel User { get; set; }
 }
 
-// In UserModel, add:
-[OneToMany("UserId", typeof(PostModel))]
+// Em UserModel:
+[OneToMany("user_id", typeof(PostModel))]
 public PostModel[] Posts { get; set; }
 ```
 
-## Using Your Models
+`SqlRepository` carrega navigation properties quando `includeRelated: true`. O loader resolve N+1 fazendo uma query por relacionamento com `WHERE pk IN (...)`. Atributos relacionais são ignorados pelo `MongoRepository`.
 
-1. Create a database connection:
+## Usando o repositório
 
-```csharp
-var builder = new MySqlConnectionStringBuilder
-{
-    Server = "localhost",
-    Database = "your_database",
-    UserID = "your_username",
-    Password = "your_password",
-    Port = 3306
-};
-
-using var connection = new MySqlConnection(builder.ConnectionString);
-```
-
-2. Create tables:
+### MySQL
 
 ```csharp
-var userTable = new UserModel();
-var postTable = new PostModel();
+using LightOrm.Core.Sql;
+using LightOrm.MySql;
+using MySql.Data.MySqlClient;
 
-await userTable.EnsureTableExistsAsync(connection);
-await postTable.EnsureTableExistsAsync(connection);
+using var conn = new MySqlConnection("Server=localhost;Database=app;Uid=root;Pwd=...");
+var repo = new SqlRepository<UserModel, int>(conn, new MySqlDialect());
+
+await repo.EnsureSchemaAsync();
+
+var user = new UserModel { Name = "Ana", Email = "ana@x.com", IsActive = true };
+await repo.SaveAsync(user);                  // INSERT — popula user.Id
+user.Email = "ana@y.com";
+await repo.SaveAsync(user);                  // UPDATE
+
+var loaded = await repo.FindByIdAsync(user.Id, includeRelated: true);
+var all = await repo.FindAllAsync();
+await repo.DeleteAsync(loaded);
 ```
 
-3. Create and save records:
+### SQLite (in-memory ou arquivo)
 
 ```csharp
-var user = new UserModel
-{
-    Name = "John Doe",
-    Email = "john@example.com",
-    Age = 30,
-    Balance = 1000.50m,
-    IsActive = true
-};
-await user.SaveAsync(connection);
+using Microsoft.Data.Sqlite;
+using LightOrm.Sqlite;
 
-var post = new PostModel
-{
-    Title = "My First Post",
-    Content = "Hello, World!",
-    UserId = user.Id
-};
-await post.SaveAsync(connection);
+using var conn = new SqliteConnection("Data Source=:memory:");
+conn.Open();
+var repo = new SqlRepository<UserModel, int>(conn, new SqliteDialect());
+await repo.EnsureSchemaAsync();
+// ...mesma API.
 ```
 
-4. Load records with relationships:
+### MongoDB
 
 ```csharp
-// Load user with their posts
-var loadedUser = await UserModel.FindByIdAsync(connection, user.Id, includeRelated: true);
-foreach (var post in loadedUser.Posts)
-{
-    Console.WriteLine($"{post.Title}: {post.Content}");
-}
+using MongoDB.Driver;
+using LightOrm.Mongo;
 
-// Load all users
-var allUsers = await UserModel.FindAllAsync(connection);
+// Para Mongo, defina o modelo com TId = string (ObjectId).
+public class UserMongoModel : BaseModel<UserMongoModel, string> { ... }
+
+var db = new MongoClient("mongodb://localhost:27017").GetDatabase("app");
+var repo = new MongoRepository<UserMongoModel, string>(db);
+await repo.EnsureSchemaAsync();              // no-op (schemaless)
+
+var user = new UserMongoModel { Name = "Ana" };
+await repo.SaveAsync(user);                  // gera ObjectId em user.Id
 ```
 
-5. Update records:
-
-```csharp
-user.Balance += 500;
-await user.SaveAsync(connection);
-```
-
-6. Delete records:
-
-```csharp
-await post.DeleteAsync(connection);
-```
-
-## Unity Integration
-
-In Unity, use the DatabaseManager component to manage connections:
-
-1. Add DatabaseManager to a GameObject
-2. Configure connection settings in the Inspector
-3. Use the DatabaseManager to get connections:
+## Unity
 
 ```csharp
 public class GameManager : MonoBehaviour
 {
     private async void Start()
     {
-        try
-        {
-            using var connection = DatabaseManager.Instance.GetConnection();
-            
-            var user = new UserModel
-            {
-                Name = "Player One",
-                Email = "player@game.com",
-                IsActive = true
-            };
-            
-            await user.SaveAsync(connection);
-            Debug.Log($"Created user: {user.Name}");
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Database operation failed: {ex.Message}");
-        }
+        using var conn = DatabaseManager.Instance.GetConnection();
+        var repo = new SqlRepository<UserModel, int>(conn, new MySqlDialect());
+
+        var user = new UserModel { Name = "Player", Email = "p@game.com", IsActive = true };
+        await repo.SaveAsync(user);
+        Debug.Log($"Created user {user.Id}");
     }
 }
 ```
 
-## Testing Your Models
+Configure servidor/usuário/senha no Inspector do `DatabaseManager`.
 
-1. Create a test project (see LightOrm.Tests for an example)
-2. Define your models
-3. Create a test program that:
-   - Sets up database connection
-   - Creates tables
-   - Performs CRUD operations
-   - Tests relationships
-   - Handles errors appropriately
+## Build e testes
 
-## Best Practices
+```
+dotnet build LightOrm.sln
+dotnet test  LightOrm.Core.Tests/LightOrm.Core.Tests.csproj
+```
 
-1. Always use `using` statements with connections
-2. Handle exceptions appropriately
-3. Use async/await for all database operations
-4. Keep connection strings secure
-5. Use meaningful table and column names
-6. Define appropriate column lengths and types
-7. Use transactions for multiple operations that need to be atomic
+Os testes assumem MySQL local em `localhost:3307` (root/`my-secret-pw`) e MongoDB em `localhost:27017`. SQLite roda in-memory sem dependência externa. Suba os serviços via Docker:
 
-## License
+```
+docker run -d --name lightorm-mysql -p 3307:3306 -e MYSQL_ROOT_PASSWORD=my-secret-pw mysql:8
+docker run -d --name lightorm-mongo -p 27017:27017 mongo:7
+```
 
-MIT License - feel free to use in your projects.
+## Limitações conhecidas
+
+- Sem cascata em `SaveAsync`/`DeleteAsync` — gerencie FKs manualmente.
+- Carregamento eager apenas (`includeRelated: true`); não há lazy loading.
+- `MongoRepository` não traduz atributos relacionais (planejado: embed via novo `[Embedded]`).
+- Sem query builder fluente; consultas além de `FindById`/`FindAll` exigem SQL/BSON manual.
+
+## Licença
+
+MIT.
