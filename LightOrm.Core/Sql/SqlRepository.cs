@@ -144,24 +144,38 @@ namespace LightOrm.Core.Sql
                 var colList = string.Join(", ", writableCols.Select(c => Q(c.col.Name)));
                 var paramList = string.Join(", ", writableCols.Select(c => P(c.col.Name)));
 
-                var sql = $"INSERT INTO {Q(_tableName)} ({colList}) VALUES ({paramList});";
+                var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
+                var returning = IsAutoIncrement(idProp)
+                    ? _dialect.GetInsertReturningClause(Q(idCol.Name))
+                    : null;
+
+                var sql = string.IsNullOrEmpty(returning)
+                    ? $"INSERT INTO {Q(_tableName)} ({colList}) VALUES ({paramList});"
+                    : $"INSERT INTO {Q(_tableName)} ({colList}) VALUES ({paramList}) {returning};";
+
+                object rawId = null;
                 using (var cmd = NewCommand(sql, tx))
                 {
                     foreach (var (col, prop) in writableCols)
                         AddParam(cmd, col.Name, prop.GetValue(entity), prop.PropertyType);
-                    await cmd.ExecuteNonQueryAsync();
+
+                    if (string.IsNullOrEmpty(returning))
+                        await cmd.ExecuteNonQueryAsync();
+                    else
+                        rawId = await cmd.ExecuteScalarAsync();
                 }
 
-                if (IsAutoIncrement(idProp))
+                if (IsAutoIncrement(idProp) && string.IsNullOrEmpty(returning))
                 {
                     using var idCmd = NewCommand(_dialect.GetLastInsertIdSql(), tx);
-                    var rawId = await idCmd.ExecuteScalarAsync();
-                    if (rawId != null && rawId != DBNull.Value)
-                    {
-                        var converted = Convert.ChangeType(rawId,
-                            Nullable.GetUnderlyingType(idProp.PropertyType) ?? idProp.PropertyType);
-                        idProp.SetValue(entity, converted);
-                    }
+                    rawId = await idCmd.ExecuteScalarAsync();
+                }
+
+                if (IsAutoIncrement(idProp) && rawId != null && rawId != DBNull.Value)
+                {
+                    var converted = Convert.ChangeType(rawId,
+                        Nullable.GetUnderlyingType(idProp.PropertyType) ?? idProp.PropertyType);
+                    idProp.SetValue(entity, converted);
                 }
 
                 tx.Commit();

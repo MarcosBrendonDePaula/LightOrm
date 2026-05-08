@@ -18,6 +18,8 @@ namespace LightOrm.Sqlite
 
         public string GetLastInsertIdSql() => "SELECT last_insert_rowid();";
 
+        public string GetInsertReturningClause(string idColumnQuoted) => null;
+
         public string MapType(Type clrType, ColumnAttribute column)
         {
             // SQLite usa type affinity: INTEGER, TEXT, REAL, BLOB, NUMERIC.

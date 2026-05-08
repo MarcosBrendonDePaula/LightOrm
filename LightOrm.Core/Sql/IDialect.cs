@@ -13,6 +13,11 @@ namespace LightOrm.Core.Sql
 
         string QuoteIdentifier(string name);
         string GetLastInsertIdSql();
+
+        // Permite ao dialect anexar uma cláusula RETURNING ao INSERT (Postgres).
+        // Dialects que usam função separada de last-insert-id devolvem null aqui.
+        string GetInsertReturningClause(string idColumnQuoted);
+
         string MapType(Type clrType, ColumnAttribute column);
 
         object ToDbValue(object clrValue, Type clrType);

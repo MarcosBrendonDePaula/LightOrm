@@ -12,6 +12,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Sqlite", "LightOrm
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Mongo", "LightOrm.Mongo\LightOrm.Mongo.csproj", "{3A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Postgres", "LightOrm.Postgres\LightOrm.Postgres.csproj", "{5A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D7}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Core.Tests", "LightOrm.Core.Tests\LightOrm.Core.Tests.csproj", "{4A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D6}"
 EndProject
 Global
@@ -47,5 +49,9 @@ Global
 		{4A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D7}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

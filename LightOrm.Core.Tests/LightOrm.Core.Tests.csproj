@@ -13,6 +13,7 @@
     <PackageReference Include="MySql.Data" Version="9.3.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.0" />
     <PackageReference Include="MongoDB.Driver" Version="2.28.0" />
+    <PackageReference Include="Npgsql" Version="8.0.3" />
     <PackageReference Include="xunit" Version="2.4.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.4.5">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -29,6 +30,7 @@
     <ProjectReference Include="..\LightOrm.MySql\LightOrm.MySql.csproj" />
     <ProjectReference Include="..\LightOrm.Sqlite\LightOrm.Sqlite.csproj" />
     <ProjectReference Include="..\LightOrm.Mongo\LightOrm.Mongo.csproj" />
+    <ProjectReference Include="..\LightOrm.Postgres\LightOrm.Postgres.csproj" />
   </ItemGroup>
 
 </Project>

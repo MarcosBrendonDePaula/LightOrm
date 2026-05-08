@@ -17,6 +17,8 @@ namespace LightOrm.MySql
 
         public string GetLastInsertIdSql() => "SELECT LAST_INSERT_ID();";
 
+        public string GetInsertReturningClause(string idColumnQuoted) => null;
+
         public string MapType(Type clrType, ColumnAttribute column)
         {
             var underlying = Nullable.GetUnderlyingType(clrType) ?? clrType;
