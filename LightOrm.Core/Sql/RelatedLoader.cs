@@ -163,7 +163,7 @@ namespace LightOrm.Core.Sql
                 {
                     var srcOrdinal = reader.GetOrdinal("__src");
                     var srcValue = dialect.FromDbValue(reader.GetValue(srcOrdinal), rootPk.PropertyType);
-                    var item = Activator.CreateInstance(attr.RelatedType);
+                    var item = NewInstance(attr.RelatedType);
                     PopulateInstance(reader, item, attr.RelatedType, dialect);
                     if (!grouped.TryGetValue(srcValue, out var list))
                         grouped[srcValue] = list = new List<object>();
@@ -209,7 +209,7 @@ namespace LightOrm.Core.Sql
                 using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {
-                    var instance = Activator.CreateInstance(relatedType);
+                    var instance = NewInstance(relatedType);
                     PopulateInstance(reader, instance, relatedType, dialect);
                     var pkValue = pk.GetValue(instance);
                     if (pkValue != null) result[pkValue] = instance;
@@ -242,7 +242,7 @@ namespace LightOrm.Core.Sql
                 while (await reader.ReadAsync())
                 {
                     if (fkOrdinal < 0) fkOrdinal = reader.GetOrdinal(columnName);
-                    var instance = Activator.CreateInstance(relatedType);
+                    var instance = NewInstance(relatedType);
                     PopulateInstance(reader, instance, relatedType, dialect);
                     var fkValue = fkProp != null
                         ? fkProp.GetValue(instance)
@@ -264,8 +264,27 @@ namespace LightOrm.Core.Sql
                 catch (IndexOutOfRangeException) { continue; }
                 if (reader.IsDBNull(ordinal)) continue;
                 var raw = reader.GetValue(ordinal);
-                var converted = dialect.FromDbValue(raw, prop.PropertyType);
-                prop.SetValue(instance, converted);
+                try
+                {
+                    var converted = dialect.FromDbValue(raw, prop.PropertyType);
+                    prop.SetValue(instance, converted);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Falha ao popular {type.Name}.{prop.Name} (coluna '{col.Name}', " +
+                        $"valor '{raw}' do tipo {raw?.GetType().Name ?? "null"}): {ex.Message}", ex);
+                }
+            }
+        }
+
+        private static object NewInstance(Type type)
+        {
+            try { return Activator.CreateInstance(type); }
+            catch (MissingMethodException)
+            {
+                throw new InvalidOperationException(
+                    $"Tipo {type.Name} precisa de um construtor sem parâmetros para ser usado em relacionamentos.");
             }
         }
 

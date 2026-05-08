@@ -55,8 +55,13 @@ namespace LightOrm.Core.Sql
             using var tx = _connection.BeginTransaction();
             try
             {
-                using var cmd = NewCommand(BuildCreateTableSql(), tx);
-                await cmd.ExecuteNonQueryAsync();
+                // Executa cada statement (CREATE TABLE + N CREATE INDEX) separadamente
+                // em vez de empilhar com ';'. Mais portável entre drivers.
+                foreach (var statement in BuildSchemaStatements())
+                {
+                    using var cmd = NewCommand(statement, tx);
+                    await cmd.ExecuteNonQueryAsync();
+                }
                 tx.Commit();
             }
             catch
@@ -66,7 +71,7 @@ namespace LightOrm.Core.Sql
             }
         }
 
-        private string BuildCreateTableSql()
+        private IEnumerable<string> BuildSchemaStatements()
         {
             var columns = new List<string>();
             var foreignKeys = new List<string>();
@@ -95,11 +100,8 @@ namespace LightOrm.Core.Sql
 
             var allParts = columns.Concat(foreignKeys);
             var ifNotExists = _dialect.SupportsIfNotExists ? "IF NOT EXISTS " : "";
-            var createTable = $"CREATE TABLE {ifNotExists}{Q(_tableName)} (\n  {string.Join(",\n  ", allParts)}\n);";
+            yield return $"CREATE TABLE {ifNotExists}{Q(_tableName)} (\n  {string.Join(",\n  ", allParts)}\n)";
 
-            // Índices em colunas FK como statements separados (compatível com SQLite,
-            // que não aceita INDEX dentro de CREATE TABLE). MySQL também suporta.
-            var indexStatements = new List<string>();
             foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
             {
                 var fk = TypeMetadataCache.GetForeignKeyAttribute(prop);
@@ -107,15 +109,10 @@ namespace LightOrm.Core.Sql
                 if (fk != null && col != null)
                 {
                     var idxIfNotExists = _dialect.SupportsCreateIndexIfNotExists ? "IF NOT EXISTS " : "";
-                    indexStatements.Add(
-                        $"CREATE INDEX {idxIfNotExists}{Q($"idx_{_tableName}_{col.Name}")} " +
-                        $"ON {Q(_tableName)}({Q(col.Name)});");
+                    yield return $"CREATE INDEX {idxIfNotExists}{Q($"idx_{_tableName}_{col.Name}")} " +
+                                 $"ON {Q(_tableName)}({Q(col.Name)})";
                 }
             }
-
-            return indexStatements.Count == 0
-                ? createTable
-                : createTable + "\n" + string.Join("\n", indexStatements);
         }
 
         public async Task<T> SaveAsync(T entity)
@@ -353,9 +350,7 @@ namespace LightOrm.Core.Sql
 
             if (IsAutoIncrement(idProp) && rawId != null && rawId != DBNull.Value)
             {
-                var converted = Convert.ChangeType(rawId,
-                    Nullable.GetUnderlyingType(idProp.PropertyType) ?? idProp.PropertyType);
-                idProp.SetValue(entity, converted);
+                idProp.SetValue(entity, ConvertToTarget(rawId, idProp.PropertyType));
             }
         }
 
@@ -424,6 +419,13 @@ namespace LightOrm.Core.Sql
         {
             var col = TypeMetadataCache.GetColumnAttribute(idProp);
             return col != null && col.AutoIncrement;
+        }
+
+        private static object ConvertToTarget(object value, Type targetType)
+        {
+            var underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
+            if (value.GetType() == underlying) return value;
+            return Convert.ChangeType(value, underlying, System.Globalization.CultureInfo.InvariantCulture);
         }
 
         private static bool IsDefaultId(object idValue)

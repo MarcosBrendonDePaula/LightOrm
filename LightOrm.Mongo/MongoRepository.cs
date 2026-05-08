@@ -33,11 +33,36 @@ namespace LightOrm.Mongo
         {
             if (entities == null) throw new ArgumentNullException(nameof(entities));
             var list = new System.Collections.Generic.List<T>();
+            var inserts = new System.Collections.Generic.List<BsonDocument>();
+            var insertEntities = new System.Collections.Generic.List<T>();
+            var now = DateTime.UtcNow;
+
             foreach (var entity in entities)
             {
-                await SaveAsync(entity);
+                var idValue = _idProp.GetValue(entity);
+                if (IsDefaultId(idValue))
+                {
+                    entity.CreatedAt = now;
+                    entity.UpdatedAt = now;
+                    if (typeof(TId) == typeof(string) && (idValue == null || (string)idValue == ""))
+                        _idProp.SetValue(entity, ObjectId.GenerateNewId().ToString());
+                    else if (typeof(TId) == typeof(Guid) && (Guid)idValue == Guid.Empty)
+                        _idProp.SetValue(entity, Guid.NewGuid());
+
+                    inserts.Add(ToBson(entity));
+                    insertEntities.Add(entity);
+                }
+                else
+                {
+                    // Updates ainda vão um por vez — InsertMany é só pra novos.
+                    await SaveAsync(entity);
+                }
                 list.Add(entity);
             }
+
+            if (inserts.Count > 0)
+                await _collection.InsertManyAsync(inserts);
+
             return list;
         }
 
@@ -151,6 +176,7 @@ namespace LightOrm.Mongo
             var t = idValue.GetType();
             if (t == typeof(int)) return (int)idValue == 0;
             if (t == typeof(long)) return (long)idValue == 0;
+            if (t == typeof(short)) return (short)idValue == 0;
             if (t == typeof(Guid)) return (Guid)idValue == Guid.Empty;
             if (t == typeof(string)) return string.IsNullOrEmpty((string)idValue);
             return Equals(idValue, Activator.CreateInstance(t));
