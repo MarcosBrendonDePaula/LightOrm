@@ -171,6 +171,41 @@ namespace LightOrm.Core.Tests
         }
 
         [Fact]
+        public async Task WhereAny_combines_conditions_with_OR()
+        {
+            var repo = await Seed();
+            var result = await repo.Query()
+                .WhereAny(
+                    (nameof(TypesModel.Name), "=", "item-01"),
+                    (nameof(TypesModel.Name), "=", "item-05"),
+                    (nameof(TypesModel.Name), "=", "item-09"))
+                .ToListAsync();
+            Assert.Equal(3, result.Count);
+        }
+
+        [Fact]
+        public async Task WhereAny_combined_with_Where_uses_AND_between_them()
+        {
+            var repo = await Seed();
+            var result = await repo.Query()
+                .Where(nameof(TypesModel.DecimalValue), ">", 5m)
+                .WhereAny(
+                    (nameof(TypesModel.Name), "=", "item-04"),  // dec=6.0 — passa só o segundo
+                    (nameof(TypesModel.Name), "=", "item-08"))  // dec=12.0 — passa
+                .ToListAsync();
+            // item-04 tem decimal 4*1.5=6 > 5 ✓; item-08 tem 12 > 5 ✓.
+            Assert.Equal(2, result.Count);
+        }
+
+        [Fact]
+        public async Task WhereAny_with_empty_throws()
+        {
+            var repo = await Seed();
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                repo.Query().WhereAny().ToListAsync());
+        }
+
+        [Fact]
         public async Task Multiple_Where_combine_with_AND()
         {
             var repo = await Seed();

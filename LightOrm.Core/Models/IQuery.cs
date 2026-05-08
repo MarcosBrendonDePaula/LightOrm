@@ -17,6 +17,12 @@ namespace LightOrm.Core.Models
         IQuery<T, TId> Where(string propertyName, string op, object value);
         IQuery<T, TId> Where(string propertyName, object value);
         IQuery<T, TId> WhereIn(string propertyName, IEnumerable<object> values);
+
+        // Adiciona um grupo (cond1 OR cond2 OR ...) ao WHERE. As condições do
+        // grupo são combinadas com OR; o grupo se combina com os demais via AND.
+        // Exemplo: .Where("Active", true).WhereAny(("Role","=","admin"), ("Role","=","mod"))
+        // → WHERE Active = ? AND (Role = ? OR Role = ?)
+        IQuery<T, TId> WhereAny(params (string property, string op, object value)[] conditions);
         IQuery<T, TId> OrderBy(string propertyName);
         IQuery<T, TId> OrderByDescending(string propertyName);
         IQuery<T, TId> Take(int limit);
