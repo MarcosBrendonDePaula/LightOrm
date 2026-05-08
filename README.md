@@ -138,6 +138,82 @@ var user = new UserMongoModel { Name = "Ana" };
 await repo.SaveAsync(user);                  // gera ObjectId em user.Id
 ```
 
+## Modelo portável e troca de backend
+
+A interface `IRepository<T, TId>` é a mesma em todos os providers. Programe contra ela e o composition root escolhe o backend:
+
+```csharp
+public class User : BaseModel<User, string>   // string viabiliza SQL e Mongo no mesmo modelo
+{
+    public override string TableName => "users";
+    [Column("name")]   public string Name { get; set; }
+    [Column("active")] public bool   Active { get; set; }
+}
+
+IRepository<User, string> repo = backend switch
+{
+    "mysql"    => RepositoryFactory.Sql<User, string>(mysqlConn,    new MySqlDialect()),
+    "sqlite"   => RepositoryFactory.Sql<User, string>(sqliteConn,   new SqliteDialect()),
+    "postgres" => RepositoryFactory.Sql<User, string>(postgresConn, new PostgresDialect()),
+    "mongo"    => new MongoRepository<User, string>(database),
+    _ => throw new InvalidOperationException()
+};
+
+// O resto do código não muda em nenhum caso.
+await repo.SaveAsync(user);
+```
+
+Quando `TId = string`, o framework gera `Guid.NewGuid().ToString("N")` no insert se você não preencher `Id`. Se preencher, use `UpsertAsync` em vez de `SaveAsync` (caso contrário vira UPDATE de linha que não existe).
+
+## Query builder
+
+`repo.Query()` devolve `IQuery<T, TId>` — mesma API em SQL e Mongo:
+
+```csharp
+var ativos = await repo.Query()
+    .Where(nameof(User.Active), true)
+    .Where(nameof(User.Name), "LIKE", "Ana%")
+    .OrderByDescending(nameof(User.CreatedAt))
+    .Take(20)
+    .ToListAsync();
+
+var quantos = await repo.Query()
+    .WhereIn(nameof(User.Name), new object[] { "Ana", "Bia", "Caio" })
+    .CountAsync();
+
+var existe = await repo.Query()
+    .Where(nameof(User.Name), "Ana")
+    .AnyAsync();
+```
+
+Operadores: `=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `NOT LIKE`. Em Mongo, `LIKE` é traduzido para regex (`%` → `.*`, `_` → `.`).
+
+Nomes de propriedade são resolvidos contra o modelo (use `nameof(...)`); valores desconhecidos viram `ArgumentException` antes de tocar o banco. Operadores fora da whitelist também são rejeitados.
+
+## Upsert
+
+Quando o caller controla o id (string/Guid):
+
+```csharp
+var u = new User { Id = "user-001", Name = "Ana" };
+await repo.UpsertAsync(u);   // insere — id não existia
+u.Name = "Ana Atualizada";
+await repo.UpsertAsync(u);   // atualiza — preserva CreatedAt original
+```
+
+## Atributos de modelo
+
+| Atributo | Onde |
+|---|---|
+| `[Column(name, length, isPrimaryKey, autoIncrement, isUnsigned)]` | Mapeia propriedade para coluna/campo. Obrigatório nos campos persistidos. |
+| `[ForeignKey(referenceTable, referenceColumn)]` | Gera `FOREIGN KEY` no `CREATE TABLE`. SQL apenas. |
+| `[OneToOne(fkProperty, relatedType)]` | Navigation property 1:1. SQL apenas. |
+| `[OneToMany(fkProperty, relatedType)]` | Coleção 1:N. SQL apenas. |
+| `[ManyToMany(relatedType, associationTable, sourceFK, targetFK)]` | N:N via tabela de associação. SQL apenas. |
+| `[Embedded]` | Subdocumento aninhado (1:1 ou array 1:N). MongoDB apenas; ignorado em SQL. |
+
+Subdocumentos `[Embedded]` são POCO comum — não precisam herdar `BaseModel`.
+
 ## Unity
 
 ```csharp
@@ -199,8 +275,9 @@ await repo.SaveManyAsync(new[] { user1, user2, user3 });
 
 - Sem cascata em `SaveAsync`/`DeleteAsync` — gerencie FKs manualmente.
 - Carregamento eager apenas (`includeRelated: true`); não há lazy loading.
-- `MongoRepository` não traduz atributos relacionais (planejado: embed via novo `[Embedded]`).
-- Sem query builder fluente; consultas além de `FindById`/`FindAll` exigem SQL/BSON manual.
+- `MongoRepository` não traduz `[OneToMany]`/`[ManyToMany]` via `$lookup`. Use `[Embedded]` para relacionamentos no Mongo.
+- Query builder cobre filtros simples (`Where`/`WhereIn`/`OrderBy`/`Take`/`Skip`/`Count`/`Any`); JOINs, GROUP BY e expressões complexas exigem SQL/BSON manual.
+- Sem optimistic locking embutido — concorrência alta requer estratégia própria.
 
 ## Licença
 
