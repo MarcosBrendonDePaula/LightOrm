@@ -12,6 +12,9 @@ namespace LightOrm.Core.Models
         // Insere se o id não existe; atualiza se existe. Útil quando o caller
         // gera o id (string/Guid) e precisa de "create-or-replace" idempotente.
         Task<T> UpsertAsync(T entity);
+
+        // Builder fluente: filtros, ordenação, paginação, count, any.
+        IQuery<T, TId> Query();
         Task<T> FindByIdAsync(TId id, bool includeRelated = false);
         Task<List<T>> FindAllAsync(bool includeRelated = false);
         Task DeleteAsync(T entity);
