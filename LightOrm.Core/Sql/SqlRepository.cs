@@ -95,7 +95,27 @@ namespace LightOrm.Core.Sql
 
             var allParts = columns.Concat(foreignKeys);
             var ifNotExists = _dialect.SupportsIfNotExists ? "IF NOT EXISTS " : "";
-            return $"CREATE TABLE {ifNotExists}{Q(_tableName)} (\n  {string.Join(",\n  ", allParts)}\n);";
+            var createTable = $"CREATE TABLE {ifNotExists}{Q(_tableName)} (\n  {string.Join(",\n  ", allParts)}\n);";
+
+            // Índices em colunas FK como statements separados (compatível com SQLite,
+            // que não aceita INDEX dentro de CREATE TABLE). MySQL também suporta.
+            var indexStatements = new List<string>();
+            foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
+            {
+                var fk = TypeMetadataCache.GetForeignKeyAttribute(prop);
+                var col = TypeMetadataCache.GetColumnAttribute(prop);
+                if (fk != null && col != null)
+                {
+                    var idxIfNotExists = _dialect.SupportsCreateIndexIfNotExists ? "IF NOT EXISTS " : "";
+                    indexStatements.Add(
+                        $"CREATE INDEX {idxIfNotExists}{Q($"idx_{_tableName}_{col.Name}")} " +
+                        $"ON {Q(_tableName)}({Q(col.Name)});");
+                }
+            }
+
+            return indexStatements.Count == 0
+                ? createTable
+                : createTable + "\n" + string.Join("\n", indexStatements);
         }
 
         public async Task<T> SaveAsync(T entity)
@@ -203,29 +223,41 @@ namespace LightOrm.Core.Sql
             using var cmd = NewCommand(sql);
             AddParam(cmd, idCol.Name, id, typeof(TId));
 
-            using var reader = await cmd.ExecuteReaderAsync();
-            if (await reader.ReadAsync())
+            T instance = null;
+            using (var reader = await cmd.ExecuteReaderAsync())
             {
-                var instance = new T();
-                Populate(reader, instance);
-                return instance;
+                if (await reader.ReadAsync())
+                {
+                    instance = new T();
+                    Populate(reader, instance);
+                }
             }
-            return null;
+
+            if (instance != null && includeRelated)
+                await RelatedLoader.LoadAsync(_connection, _dialect, typeof(T), new object[] { instance });
+
+            return instance;
         }
 
         public async Task<List<T>> FindAllAsync(bool includeRelated = false)
         {
             await EnsureOpenAsync();
             var sql = $"SELECT * FROM {Q(_tableName)}";
-            using var cmd = NewCommand(sql);
-            using var reader = await cmd.ExecuteReaderAsync();
             var results = new List<T>();
-            while (await reader.ReadAsync())
+            using (var cmd = NewCommand(sql))
+            using (var reader = await cmd.ExecuteReaderAsync())
             {
-                var instance = new T();
-                Populate(reader, instance);
-                results.Add(instance);
+                while (await reader.ReadAsync())
+                {
+                    var instance = new T();
+                    Populate(reader, instance);
+                    results.Add(instance);
+                }
             }
+
+            if (includeRelated && results.Count > 0)
+                await RelatedLoader.LoadAsync(_connection, _dialect, typeof(T), results.Cast<object>().ToList());
+
             return results;
         }
 
