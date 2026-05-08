@@ -49,6 +49,28 @@ namespace LightOrm.Core.Tests.Models
         public int? ParentId { get; set; }
     }
 
+    public class CascadeParentModel : BaseModel<CascadeParentModel, int>
+    {
+        public override string TableName => "cascade_parent";
+
+        [Column("name", length: 100)]
+        public string Name { get; set; }
+
+        [OneToMany("parent_id", typeof(CascadeChildModel), cascade: true)]
+        public CascadeChildModel[] Children { get; set; }
+    }
+
+    public class CascadeChildModel : BaseModel<CascadeChildModel, int>
+    {
+        public override string TableName => "cascade_child";
+
+        [Column("label", length: 100)]
+        public string Label { get; set; }
+
+        [Column("parent_id")]
+        public int ParentId { get; set; }
+    }
+
     public class VersionedModel : BaseModel<VersionedModel, int>
     {
         public override string TableName => "versioned";

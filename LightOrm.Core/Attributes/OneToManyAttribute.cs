@@ -10,11 +10,15 @@ namespace LightOrm.Core.Attributes
     {
         public string ForeignKeyProperty { get; }
         public Type RelatedType { get; }
+        // Quando true, SaveAsync(pai) propaga o id pra FK dos filhos no array
+        // e salva todos numa única transação. Default false (opt-in).
+        public bool Cascade { get; }
 
-        public OneToManyAttribute(string foreignKeyProperty, Type relatedType)
+        public OneToManyAttribute(string foreignKeyProperty, Type relatedType, bool cascade = false)
         {
             ForeignKeyProperty = foreignKeyProperty;
             RelatedType = relatedType;
+            Cascade = cascade;
         }
     }
 }

@@ -172,6 +172,7 @@ namespace LightOrm.Core.Sql
             try
             {
                 await InsertWithinTxAsync(entity, idProp, tx);
+                await CascadeSaver.SaveCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
                 if (owned) tx.Commit();
                 return entity;
             }
@@ -192,6 +193,7 @@ namespace LightOrm.Core.Sql
             try
             {
                 await UpdateWithinTxAsync(entity, idProp, tx);
+                await CascadeSaver.SaveCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
                 if (owned) tx.Commit();
                 return entity;
             }
