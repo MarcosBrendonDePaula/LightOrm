@@ -33,6 +33,11 @@ namespace LightOrm.Core.Models
         [Column("UpdatedAt")]
         public DateTime UpdatedAt { get; set; }
 
+        // Preenchido por DeleteAsync quando [SoftDelete] está ativo na classe.
+        // Sem [SoftDelete], a propriedade existe mas NÃO vira coluna (filtrada
+        // em BuildSchemaStatements).
+        public DateTime? DeletedAt { get; set; }
+
         public string GetTableName() => TableName;
 
         // ---------- Hooks ----------

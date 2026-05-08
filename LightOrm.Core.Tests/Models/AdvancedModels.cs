@@ -110,6 +110,15 @@ namespace LightOrm.Core.Tests.Models
         public int Age { get; set; }
     }
 
+    [SoftDelete]
+    public class SoftDeletedModel : BaseModel<SoftDeletedModel, int>
+    {
+        public override string TableName => "soft_deleted";
+
+        [Column("name", length: 100)]
+        public string Name { get; set; }
+    }
+
     [Table("table_attr_demo")]
     public class TableAttributeModel : BaseModel<TableAttributeModel, int>
     {
