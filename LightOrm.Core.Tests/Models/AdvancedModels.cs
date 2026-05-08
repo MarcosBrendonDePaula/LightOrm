@@ -60,6 +60,14 @@ namespace LightOrm.Core.Tests.Models
         public CascadeChildModel[] Children { get; set; }
     }
 
+    public class CascadeDeleteParentModel : BaseModel<CascadeDeleteParentModel, int>
+    {
+        public override string TableName => "cascade_delete_parent";
+        [Column("name", length: 100)] public string Name { get; set; }
+        [OneToMany("parent_id", typeof(CascadeChildModel), cascade: false, cascadeDelete: true)]
+        public CascadeChildModel[] Children { get; set; }
+    }
+
     public class CascadeChildModel : BaseModel<CascadeChildModel, int>
     {
         public override string TableName => "cascade_child";

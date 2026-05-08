@@ -337,23 +337,41 @@ namespace LightOrm.Core.Sql
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
             var (sdName, sdProp) = SoftDeleteHelper.Resolve(typeof(T));
 
-            string sql;
-            if (sdName != null)
+            // Cascade delete + delete principal numa tx (compartilhada com a ambiente quando há).
+            var (tx, owned) = BeginOrUseTx();
+            try
             {
-                var now = DateTime.UtcNow;
-                sdProp.SetValue(entity, now);
-                sql = $"UPDATE {Q(_tableName)} SET {Q(sdName)} = {P(sdName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
-                using var cmd = NewCommand(sql, _ambientTx);
-                AddParam(cmd, sdName, now, typeof(DateTime?));
-                AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
-                await cmd.ExecuteNonQueryAsync();
+                await CascadeDeleter.DeleteCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
+
+                string sql;
+                if (sdName != null)
+                {
+                    var now = DateTime.UtcNow;
+                    sdProp.SetValue(entity, now);
+                    sql = $"UPDATE {Q(_tableName)} SET {Q(sdName)} = {P(sdName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
+                    using var cmd = NewCommand(sql, tx);
+                    AddParam(cmd, sdName, now, typeof(DateTime?));
+                    AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+                else
+                {
+                    sql = $"DELETE FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
+                    using var cmd = NewCommand(sql, tx);
+                    AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                if (owned) tx.Commit();
             }
-            else
+            catch
             {
-                sql = $"DELETE FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
-                using var cmd = NewCommand(sql, _ambientTx);
-                AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
-                await cmd.ExecuteNonQueryAsync();
+                if (owned) tx.Rollback();
+                throw;
+            }
+            finally
+            {
+                if (owned) tx.Dispose();
             }
 
             entity.OnAfterDelete();
