@@ -10,16 +10,8 @@ using LightOrm.Core.Utilities;
 
 namespace LightOrm.Core.Sql
 {
-    /// <summary>
-    /// Carrega navigation properties em uma ou várias instâncias raiz, usando
-    /// IDialect (sem dependência de provider). Resolve N+1 do FindAll fazendo
-    /// uma única query por relacionamento com WHERE fk IN (...).
-    /// </summary>
     internal static class RelatedLoader
     {
-        // Limite por batch ao construir cláusulas IN (...). Mantém os parâmetros
-        // bem abaixo do teto de qualquer driver (Postgres ~32k, MySQL packet, etc.)
-        // sem prejudicar o caso comum de poucos pais.
         private const int InClauseChunkSize = 500;
 
         private static string BuildSelectColumns(IDialect dialect, Type type)
@@ -32,7 +24,7 @@ namespace LightOrm.Core.Sql
         }
 
         public static async Task LoadAsync(DbConnection connection, IDialect dialect,
-            Type rootType, IList<object> instances)
+            Type rootType, IList<object> instances, DbTransaction tx = null)
         {
             if (instances == null || instances.Count == 0) return;
 
@@ -42,17 +34,17 @@ namespace LightOrm.Core.Sql
             var manyToMany = props.Where(p => TypeMetadataCache.GetManyToManyAttribute(p) != null).ToList();
 
             foreach (var prop in oneToOne)
-                await LoadOneToOneAsync(connection, dialect, rootType, instances, prop);
+                await LoadOneToOneAsync(connection, dialect, rootType, instances, prop, tx);
 
             foreach (var prop in oneToMany)
-                await LoadOneToManyAsync(connection, dialect, rootType, instances, prop);
+                await LoadOneToManyAsync(connection, dialect, rootType, instances, prop, tx);
 
             foreach (var prop in manyToMany)
-                await LoadManyToManyAsync(connection, dialect, rootType, instances, prop);
+                await LoadManyToManyAsync(connection, dialect, rootType, instances, prop, tx);
         }
 
         private static async Task LoadOneToOneAsync(DbConnection connection, IDialect dialect,
-            Type rootType, IList<object> instances, PropertyInfo navProp)
+            Type rootType, IList<object> instances, PropertyInfo navProp, DbTransaction tx)
         {
             var attr = TypeMetadataCache.GetOneToOneAttribute(navProp);
             var fkProp = rootType.GetProperty(attr.ForeignKeyProperty);
@@ -65,7 +57,7 @@ namespace LightOrm.Core.Sql
             if (fkValues.Count == 0) return;
 
             var relatedTable = ResolveTableName(attr.RelatedType);
-            var relatedById = await LoadByPkInAsync(connection, dialect, attr.RelatedType, relatedTable, fkValues);
+            var relatedById = await LoadByPkInAsync(connection, dialect, attr.RelatedType, relatedTable, fkValues, tx);
 
             foreach (var instance in instances)
             {
@@ -76,7 +68,7 @@ namespace LightOrm.Core.Sql
         }
 
         private static async Task LoadOneToManyAsync(DbConnection connection, IDialect dialect,
-            Type rootType, IList<object> instances, PropertyInfo navProp)
+            Type rootType, IList<object> instances, PropertyInfo navProp, DbTransaction tx)
         {
             var attr = TypeMetadataCache.GetOneToManyAttribute(navProp);
             var rootPk = GetPkProperty(rootType);
@@ -88,15 +80,13 @@ namespace LightOrm.Core.Sql
 
             var relatedTable = ResolveTableName(attr.RelatedType);
             var fkColumnName = attr.ForeignKeyProperty;
-            // Aceita atributo apontando para nome da coluna ou da propriedade.
             var relatedFkProp = ResolveColumnProperty(attr.RelatedType, fkColumnName);
             if (relatedFkProp != null)
                 fkColumnName = TypeMetadataCache.GetColumnAttribute(relatedFkProp).Name;
 
             var relatedItems = await LoadByColumnInAsync(connection, dialect, attr.RelatedType,
-                relatedTable, fkColumnName, rootIds);
+                relatedTable, fkColumnName, rootIds, tx);
 
-            // Agrupar por valor da FK e atribuir como array no navigation property.
             var grouped = new Dictionary<object, List<object>>();
             foreach (var (fkValue, item) in relatedItems)
             {
@@ -121,7 +111,7 @@ namespace LightOrm.Core.Sql
         }
 
         private static async Task LoadManyToManyAsync(DbConnection connection, IDialect dialect,
-            Type rootType, IList<object> instances, PropertyInfo navProp)
+            Type rootType, IList<object> instances, PropertyInfo navProp, DbTransaction tx)
         {
             var attr = TypeMetadataCache.GetManyToManyAttribute(navProp);
             var rootPk = GetPkProperty(rootType);
@@ -137,7 +127,6 @@ namespace LightOrm.Core.Sql
             var sourceCol = dialect.QuoteIdentifier(attr.SourceForeignKey);
             var targetCol = dialect.QuoteIdentifier(attr.TargetForeignKey);
             var relatedPkCol = dialect.QuoteIdentifier(GetPkColumnName(attr.RelatedType));
-            // Lista de colunas explícita do tipo relacionado, prefixadas por r.
             var relatedColumns = string.Join(", ",
                 TypeMetadataCache.GetProperties(attr.RelatedType)
                     .Select(p => TypeMetadataCache.GetColumnAttribute(p))
@@ -156,6 +145,7 @@ namespace LightOrm.Core.Sql
 
                 using var cmd = dialect.CreateCommand(connection);
                 cmd.CommandText = sql;
+                if (tx != null) cmd.Transaction = tx;
                 addValues(cmd);
 
                 using var reader = await cmd.ExecuteReaderAsync();
@@ -188,7 +178,7 @@ namespace LightOrm.Core.Sql
 
         private static async Task<Dictionary<object, object>> LoadByPkInAsync(
             DbConnection connection, IDialect dialect, Type relatedType,
-            string relatedTable, IList<object> ids)
+            string relatedTable, IList<object> ids, DbTransaction tx)
         {
             var pk = GetPkProperty(relatedType);
             var pkCol = TypeMetadataCache.GetColumnAttribute(pk).Name;
@@ -204,6 +194,7 @@ namespace LightOrm.Core.Sql
 
                 using var cmd = dialect.CreateCommand(connection);
                 cmd.CommandText = sql;
+                if (tx != null) cmd.Transaction = tx;
                 addValues(cmd);
 
                 using var reader = await cmd.ExecuteReaderAsync();
@@ -220,7 +211,7 @@ namespace LightOrm.Core.Sql
 
         private static async Task<List<(object fkValue, object item)>> LoadByColumnInAsync(
             DbConnection connection, IDialect dialect, Type relatedType,
-            string relatedTable, string columnName, IList<object> values)
+            string relatedTable, string columnName, IList<object> values, DbTransaction tx)
         {
             var columns = BuildSelectColumns(dialect, relatedType);
             var fkProp = ResolveColumnProperty(relatedType, columnName);
@@ -235,6 +226,7 @@ namespace LightOrm.Core.Sql
 
                 using var cmd = dialect.CreateCommand(connection);
                 cmd.CommandText = sql;
+                if (tx != null) cmd.Transaction = tx;
                 addValues(cmd);
 
                 using var reader = await cmd.ExecuteReaderAsync();

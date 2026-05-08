@@ -15,13 +15,31 @@ namespace LightOrm.Core.Sql
     {
         private readonly DbConnection _connection;
         private readonly IDialect _dialect;
+        private readonly DbTransaction _ambientTx;
         private readonly string _tableName;
 
         public SqlRepository(DbConnection connection, IDialect dialect)
+            : this(connection, dialect, null) { }
+
+        // Sobrecarga com transação externa: todas as operações reusam a tx
+        // ambiente. Não há commit/rollback automático aqui — quem criou a
+        // transação é responsável por finalizar.
+        public SqlRepository(DbConnection connection, IDialect dialect, DbTransaction ambientTransaction)
         {
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
             _dialect = dialect ?? throw new ArgumentNullException(nameof(dialect));
+            _ambientTx = ambientTransaction;
             _tableName = new T().TableName;
+        }
+
+        private bool HasAmbientTx => _ambientTx != null;
+
+        // Devolve (tx, owned). Quando há tx ambiente, owned=false e o caller
+        // não deve commit/rollback. Quando não há, abre uma nova owned=true.
+        private (DbTransaction tx, bool owned) BeginOrUseTx()
+        {
+            if (_ambientTx != null) return (_ambientTx, false);
+            return (_connection.BeginTransaction(), true);
         }
 
         private string Q(string identifier) => _dialect.QuoteIdentifier(identifier);
@@ -134,83 +152,41 @@ namespace LightOrm.Core.Sql
 
         private async Task<T> InsertAsync(T entity, PropertyInfo idProp)
         {
-            using var tx = _connection.BeginTransaction();
+            var (tx, owned) = BeginOrUseTx();
             try
             {
-                var writableCols = WritableColumns(skipAutoIncrement: true).ToList();
-                var colList = string.Join(", ", writableCols.Select(c => Q(c.col.Name)));
-                var paramList = string.Join(", ", writableCols.Select(c => P(c.col.Name)));
-
-                var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
-                var returning = IsAutoIncrement(idProp)
-                    ? _dialect.GetInsertReturningClause(Q(idCol.Name))
-                    : null;
-
-                var sql = string.IsNullOrEmpty(returning)
-                    ? $"INSERT INTO {Q(_tableName)} ({colList}) VALUES ({paramList});"
-                    : $"INSERT INTO {Q(_tableName)} ({colList}) VALUES ({paramList}) {returning};";
-
-                object rawId = null;
-                using (var cmd = NewCommand(sql, tx))
-                {
-                    foreach (var (col, prop) in writableCols)
-                        AddParam(cmd, col.Name, prop.GetValue(entity), prop.PropertyType);
-
-                    if (string.IsNullOrEmpty(returning))
-                        await cmd.ExecuteNonQueryAsync();
-                    else
-                        rawId = await cmd.ExecuteScalarAsync();
-                }
-
-                if (IsAutoIncrement(idProp) && string.IsNullOrEmpty(returning))
-                {
-                    using var idCmd = NewCommand(_dialect.GetLastInsertIdSql(), tx);
-                    rawId = await idCmd.ExecuteScalarAsync();
-                }
-
-                if (IsAutoIncrement(idProp) && rawId != null && rawId != DBNull.Value)
-                {
-                    var converted = Convert.ChangeType(rawId,
-                        Nullable.GetUnderlyingType(idProp.PropertyType) ?? idProp.PropertyType);
-                    idProp.SetValue(entity, converted);
-                }
-
-                tx.Commit();
+                await InsertWithinTxAsync(entity, idProp, tx);
+                if (owned) tx.Commit();
                 return entity;
             }
             catch
             {
-                tx.Rollback();
+                if (owned) tx.Rollback();
                 throw;
+            }
+            finally
+            {
+                if (owned) tx.Dispose();
             }
         }
 
         private async Task<T> UpdateAsync(T entity, PropertyInfo idProp)
         {
-            using var tx = _connection.BeginTransaction();
+            var (tx, owned) = BeginOrUseTx();
             try
             {
-                var writableCols = WritableColumns(skipAutoIncrement: true)
-                    .Where(c => !c.col.IsPrimaryKey)
-                    .ToList();
-                var setClause = string.Join(", ", writableCols.Select(c => $"{Q(c.col.Name)} = {P(c.col.Name)}"));
-
-                var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
-                var sql = $"UPDATE {Q(_tableName)} SET {setClause} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
-
-                using var cmd = NewCommand(sql, tx);
-                foreach (var (col, prop) in writableCols)
-                    AddParam(cmd, col.Name, prop.GetValue(entity), prop.PropertyType);
-                AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
-
-                await cmd.ExecuteNonQueryAsync();
-                tx.Commit();
+                await UpdateWithinTxAsync(entity, idProp, tx);
+                if (owned) tx.Commit();
                 return entity;
             }
             catch
             {
-                tx.Rollback();
+                if (owned) tx.Rollback();
                 throw;
+            }
+            finally
+            {
+                if (owned) tx.Dispose();
             }
         }
 
@@ -220,7 +196,7 @@ namespace LightOrm.Core.Sql
             var idProp = GetIdProperty();
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
             var sql = $"DELETE FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
-            using var cmd = NewCommand(sql);
+            using var cmd = NewCommand(sql, _ambientTx);
             AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
             await cmd.ExecuteNonQueryAsync();
         }
@@ -240,7 +216,7 @@ namespace LightOrm.Core.Sql
             var idProp = GetIdProperty();
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
             var sql = $"SELECT {SelectColumnList()} FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
-            using var cmd = NewCommand(sql);
+            using var cmd = NewCommand(sql, _ambientTx);
             AddParam(cmd, idCol.Name, id, typeof(TId));
 
             T instance = null;
@@ -254,7 +230,7 @@ namespace LightOrm.Core.Sql
             }
 
             if (instance != null && includeRelated)
-                await RelatedLoader.LoadAsync(_connection, _dialect, typeof(T), new object[] { instance });
+                await RelatedLoader.LoadAsync(_connection, _dialect, typeof(T), new object[] { instance }, _ambientTx);
 
             return instance;
         }
@@ -264,7 +240,7 @@ namespace LightOrm.Core.Sql
             await EnsureOpenAsync();
             var sql = $"SELECT {SelectColumnList()} FROM {Q(_tableName)}";
             var results = new List<T>();
-            using (var cmd = NewCommand(sql))
+            using (var cmd = NewCommand(sql, _ambientTx))
             using (var reader = await cmd.ExecuteReaderAsync())
             {
                 while (await reader.ReadAsync())
@@ -276,7 +252,7 @@ namespace LightOrm.Core.Sql
             }
 
             if (includeRelated && results.Count > 0)
-                await RelatedLoader.LoadAsync(_connection, _dialect, typeof(T), results.Cast<object>().ToList());
+                await RelatedLoader.LoadAsync(_connection, _dialect, typeof(T), results.Cast<object>().ToList(), _ambientTx);
 
             return results;
         }
@@ -289,7 +265,7 @@ namespace LightOrm.Core.Sql
 
             await EnsureOpenAsync();
             var idProp = GetIdProperty();
-            using var tx = _connection.BeginTransaction();
+            var (tx, owned) = BeginOrUseTx();
             try
             {
                 foreach (var entity in list)
@@ -307,13 +283,17 @@ namespace LightOrm.Core.Sql
                         await UpdateWithinTxAsync(entity, idProp, tx);
                     }
                 }
-                tx.Commit();
+                if (owned) tx.Commit();
                 return list;
             }
             catch
             {
-                tx.Rollback();
+                if (owned) tx.Rollback();
                 throw;
+            }
+            finally
+            {
+                if (owned) tx.Dispose();
             }
         }
 
