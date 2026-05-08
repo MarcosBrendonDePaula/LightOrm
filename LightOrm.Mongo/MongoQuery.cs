@@ -8,6 +8,7 @@ using LightOrm.Core.Attributes;
 using LightOrm.Core.Models;
 using LightOrm.Core.Utilities;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 namespace LightOrm.Mongo
@@ -151,6 +152,63 @@ namespace LightOrm.Mongo
         {
             var result = await _collection.DeleteManyAsync(BuildFilter());
             return (int)Math.Min(result.DeletedCount, int.MaxValue);
+        }
+
+        public Task<decimal?> SumAsync(string propertyName) => ScalarAggregateAsync("$sum", propertyName);
+        public Task<decimal?> AvgAsync(string propertyName) => ScalarAggregateAsync("$avg", propertyName);
+        public Task<decimal?> MinAsync(string propertyName) => ScalarAggregateAsync("$min", propertyName);
+        public Task<decimal?> MaxAsync(string propertyName) => ScalarAggregateAsync("$max", propertyName);
+
+        private async Task<decimal?> ScalarAggregateAsync(string op, string propertyName)
+        {
+            var field = ResolveFieldName(propertyName);
+            // Para $min/$max, cobrir DateTime exige ticks só se necessário; na maior
+            // parte dos casos o valor é numérico. Devolvemos como decimal? convertendo.
+            var pipeline = new[]
+            {
+                new BsonDocument("$match", BuildFilter().Render(
+                    BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+                    BsonSerializer.SerializerRegistry)),
+                new BsonDocument("$group", new BsonDocument
+                {
+                    { "_id", BsonNull.Value },
+                    { "value", new BsonDocument(op, "$" + field) }
+                })
+            };
+            var doc = await _collection.Aggregate<BsonDocument>(pipeline).FirstOrDefaultAsync();
+            if (doc == null || !doc.Contains("value") || doc["value"].IsBsonNull) return null;
+            var v = MongoDB.Bson.BsonTypeMapper.MapToDotNetValue(doc["value"]);
+            try { return Convert.ToDecimal(v, System.Globalization.CultureInfo.InvariantCulture); }
+            catch (InvalidCastException)
+            {
+                if (v is DateTime dt) return dt.Ticks;
+                throw;
+            }
+        }
+
+        public async Task<System.Collections.Generic.List<(object key, int count)>> GroupByAsync(string propertyName)
+        {
+            var field = ResolveFieldName(propertyName);
+            var pipeline = new[]
+            {
+                new BsonDocument("$match", BuildFilter().Render(
+                    BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+                    BsonSerializer.SerializerRegistry)),
+                new BsonDocument("$group", new BsonDocument
+                {
+                    { "_id", "$" + field },
+                    { "count", new BsonDocument("$sum", 1) }
+                })
+            };
+            var docs = await _collection.Aggregate<BsonDocument>(pipeline).ToListAsync();
+            var result = new System.Collections.Generic.List<(object, int)>();
+            foreach (var d in docs)
+            {
+                object key = d["_id"].IsBsonNull ? null : MongoDB.Bson.BsonTypeMapper.MapToDotNetValue(d["_id"]);
+                var count = d["count"].ToInt32();
+                result.Add((key, count));
+            }
+            return result;
         }
 
         // ---------- internals ----------

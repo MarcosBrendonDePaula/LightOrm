@@ -40,5 +40,17 @@ namespace LightOrm.Core.Models
         // Bulk delete: remove (ou marca como deleted, em soft-delete) todas as
         // linhas que casam o filtro. Devolve o número de linhas afetadas.
         Task<int> DeleteAsync();
+
+        // Aggregations escalares — devolvem decimal? para acomodar int/long/decimal/
+        // double/DateTime (este último convertido via ticks). null quando não há linhas.
+        Task<decimal?> SumAsync(string propertyName);
+        Task<decimal?> AvgAsync(string propertyName);
+        Task<decimal?> MinAsync(string propertyName);
+        Task<decimal?> MaxAsync(string propertyName);
+
+        // GroupBy: agrupa pela coluna e devolve (chave, contagem). Útil para
+        // dashboards. Para agrupamento por múltiplas chaves ou agregações
+        // dentro do grupo, use Raw/aggregate manual.
+        Task<System.Collections.Generic.List<(object key, int count)>> GroupByAsync(string propertyName);
     }
 }
