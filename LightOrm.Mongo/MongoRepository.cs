@@ -29,6 +29,42 @@ namespace LightOrm.Mongo
 
         public Task EnsureSchemaAsync() => Task.CompletedTask; // Mongo é schemaless.
 
+        public async Task<T> UpsertAsync(T entity)
+        {
+            if (entity == null) throw new ArgumentNullException(nameof(entity));
+            var idValue = _idProp.GetValue(entity);
+            var now = DateTime.UtcNow;
+
+            if (IsDefaultId(idValue))
+            {
+                // Sem id: gera e insere — comportamento idêntico a SaveAsync de novo registro.
+                return await SaveAsync(entity);
+            }
+
+            // Id presente: replace com upsert. Se o registro não existir,
+            // CreatedAt/UpdatedAt são definidos como agora; se existir, mantém
+            // o CreatedAt original e atualiza UpdatedAt.
+            var filter = Builders<BsonDocument>.Filter.Eq("_id", BsonValue.Create(idValue));
+            var existing = await _collection.Find(filter).FirstOrDefaultAsync();
+            if (existing == null)
+            {
+                entity.CreatedAt = now;
+                entity.UpdatedAt = now;
+            }
+            else
+            {
+                if (existing.Contains("CreatedAt"))
+                {
+                    var raw = MongoDB.Bson.BsonTypeMapper.MapToDotNetValue(existing["CreatedAt"]);
+                    if (raw is DateTime dt) entity.CreatedAt = dt;
+                }
+                entity.UpdatedAt = now;
+            }
+            var doc = ToBson(entity);
+            await _collection.ReplaceOneAsync(filter, doc, new ReplaceOptions { IsUpsert = true });
+            return entity;
+        }
+
         public async Task<System.Collections.Generic.IReadOnlyList<T>> SaveManyAsync(System.Collections.Generic.IEnumerable<T> entities)
         {
             if (entities == null) throw new ArgumentNullException(nameof(entities));

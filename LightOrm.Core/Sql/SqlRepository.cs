@@ -273,6 +273,56 @@ namespace LightOrm.Core.Sql
             return results;
         }
 
+        public async Task<T> UpsertAsync(T entity)
+        {
+            if (entity == null) throw new ArgumentNullException(nameof(entity));
+            await EnsureOpenAsync();
+            var idProp = GetIdProperty();
+            var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
+            var idValue = idProp.GetValue(entity);
+
+            // Sem id (default ou autoIncrement): cai no caminho normal de Save.
+            if (IsDefaultId(idValue))
+                return await SaveAsync(entity);
+
+            var (tx, owned) = BeginOrUseTx();
+            try
+            {
+                var checkSql = $"SELECT 1 FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
+                bool exists;
+                using (var cmd = NewCommand(checkSql, tx))
+                {
+                    AddParam(cmd, idCol.Name, idValue, idProp.PropertyType);
+                    var raw = await cmd.ExecuteScalarAsync();
+                    exists = raw != null && raw != DBNull.Value;
+                }
+
+                if (exists)
+                {
+                    entity.UpdatedAt = DateTime.UtcNow;
+                    await UpdateWithinTxAsync(entity, idProp, tx);
+                }
+                else
+                {
+                    entity.CreatedAt = DateTime.UtcNow;
+                    entity.UpdatedAt = entity.CreatedAt;
+                    await InsertWithinTxAsync(entity, idProp, tx);
+                }
+
+                if (owned) tx.Commit();
+                return entity;
+            }
+            catch
+            {
+                if (owned) tx.Rollback();
+                throw;
+            }
+            finally
+            {
+                if (owned) tx.Dispose();
+            }
+        }
+
         public async Task<IReadOnlyList<T>> SaveManyAsync(IEnumerable<T> entities)
         {
             if (entities == null) throw new ArgumentNullException(nameof(entities));
