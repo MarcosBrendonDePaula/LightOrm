@@ -18,6 +18,7 @@ namespace LightOrm.Core.Utilities
         private static readonly ConcurrentDictionary<PropertyInfo, IndexAttribute> _indexAttributeCache = new ConcurrentDictionary<PropertyInfo, IndexAttribute>();
         private static readonly ConcurrentDictionary<PropertyInfo, UniqueAttribute> _uniqueAttributeCache = new ConcurrentDictionary<PropertyInfo, UniqueAttribute>();
         private static readonly ConcurrentDictionary<Type, TableAttribute> _tableAttributeCache = new ConcurrentDictionary<Type, TableAttribute>();
+        private static readonly ConcurrentDictionary<Type, SoftDeleteAttribute> _softDeleteAttributeCache = new ConcurrentDictionary<Type, SoftDeleteAttribute>();
 
         public static PropertyInfo[] GetProperties(Type type)
         {
@@ -72,6 +73,11 @@ namespace LightOrm.Core.Utilities
         public static TableAttribute GetTableAttribute(Type type)
         {
             return _tableAttributeCache.GetOrAdd(type, t => t.GetCustomAttribute<TableAttribute>(inherit: true));
+        }
+
+        public static SoftDeleteAttribute GetSoftDeleteAttribute(Type type)
+        {
+            return _softDeleteAttributeCache.GetOrAdd(type, t => t.GetCustomAttribute<SoftDeleteAttribute>(inherit: true));
         }
     }
 }

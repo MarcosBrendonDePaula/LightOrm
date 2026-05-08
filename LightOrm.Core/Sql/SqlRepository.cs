@@ -121,6 +121,14 @@ namespace LightOrm.Core.Sql
                 }
             }
 
+            // [SoftDelete] adiciona coluna DateTime nullable automaticamente.
+            var (sdName, sdProp) = SoftDeleteHelper.Resolve(typeof(T));
+            if (sdName != null)
+            {
+                var sdType = _dialect.MapType(typeof(DateTime?), new ColumnAttribute(sdName));
+                columns.Add($"{Q(sdName)} {sdType}");
+            }
+
             var allParts = columns.Concat(foreignKeys);
             var ifNotExists = _dialect.SupportsIfNotExists ? "IF NOT EXISTS " : "";
             yield return $"CREATE TABLE {ifNotExists}{Q(_tableName)} (\n  {string.Join(",\n  ", allParts)}\n)";
@@ -268,9 +276,23 @@ namespace LightOrm.Core.Sql
 
             var idProp = GetIdProperty();
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
-            var sql = $"DELETE FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
-            using (var cmd = NewCommand(sql, _ambientTx))
+            var (sdName, sdProp) = SoftDeleteHelper.Resolve(typeof(T));
+
+            string sql;
+            if (sdName != null)
             {
+                var now = DateTime.UtcNow;
+                sdProp.SetValue(entity, now);
+                sql = $"UPDATE {Q(_tableName)} SET {Q(sdName)} = {P(sdName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
+                using var cmd = NewCommand(sql, _ambientTx);
+                AddParam(cmd, sdName, now, typeof(DateTime?));
+                AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            else
+            {
+                sql = $"DELETE FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
+                using var cmd = NewCommand(sql, _ambientTx);
                 AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
                 await cmd.ExecuteNonQueryAsync();
             }
@@ -279,21 +301,53 @@ namespace LightOrm.Core.Sql
             await entity.OnAfterDeleteAsync();
         }
 
+        /// <summary>Restaura entidade soft-deletada (zera deleted_at).</summary>
+        public async Task RestoreAsync(T entity)
+        {
+            var (sdName, sdProp) = SoftDeleteHelper.Resolve(typeof(T));
+            if (sdName == null)
+                throw new InvalidOperationException(
+                    $"RestoreAsync requer [SoftDelete] em {typeof(T).Name}.");
+
+            await EnsureOpenAsync();
+            var idProp = GetIdProperty();
+            var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
+            sdProp.SetValue(entity, null);
+            var sql = $"UPDATE {Q(_tableName)} SET {Q(sdName)} = NULL WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
+            using var cmd = NewCommand(sql, _ambientTx);
+            AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
         private string SelectColumnList()
         {
             var cols = TypeMetadataCache.GetProperties(typeof(T))
                 .Select(p => TypeMetadataCache.GetColumnAttribute(p))
                 .Where(c => c != null)
-                .Select(c => Q(c.Name));
+                .Select(c => Q(c.Name))
+                .ToList();
+            var (sdName, _) = SoftDeleteHelper.Resolve(typeof(T));
+            if (sdName != null) cols.Add(Q(sdName));
             return string.Join(", ", cols);
         }
 
-        public async Task<T> FindByIdAsync(TId id, bool includeRelated = false)
+        public Task<T> FindByIdAsync(TId id, bool includeRelated = false) =>
+            FindByIdInternalAsync(id, includeRelated, includeDeleted: false);
+
+        /// <summary>FindById ignorando o filtro de soft delete.</summary>
+        public Task<T> FindByIdIncludingDeletedAsync(TId id, bool includeRelated = false) =>
+            FindByIdInternalAsync(id, includeRelated, includeDeleted: true);
+
+        private async Task<T> FindByIdInternalAsync(TId id, bool includeRelated, bool includeDeleted)
         {
             await EnsureOpenAsync();
             var idProp = GetIdProperty();
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
-            var sql = $"SELECT {SelectColumnList()} FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
+            var (sdName, _) = SoftDeleteHelper.Resolve(typeof(T));
+            var where = $"{Q(idCol.Name)} = {P(idCol.Name)}";
+            if (sdName != null && !includeDeleted)
+                where += $" AND {Q(sdName)} IS NULL";
+            var sql = $"SELECT {SelectColumnList()} FROM {Q(_tableName)} WHERE {where}";
             using var cmd = NewCommand(sql, _ambientTx);
             AddParam(cmd, idCol.Name, id, typeof(TId));
 
@@ -318,10 +372,20 @@ namespace LightOrm.Core.Sql
             return instance;
         }
 
-        public async Task<List<T>> FindAllAsync(bool includeRelated = false)
+        public Task<List<T>> FindAllAsync(bool includeRelated = false) =>
+            FindAllInternalAsync(includeRelated, includeDeleted: false);
+
+        /// <summary>FindAll ignorando o filtro de soft delete.</summary>
+        public Task<List<T>> FindAllIncludingDeletedAsync(bool includeRelated = false) =>
+            FindAllInternalAsync(includeRelated, includeDeleted: true);
+
+        private async Task<List<T>> FindAllInternalAsync(bool includeRelated, bool includeDeleted)
         {
             await EnsureOpenAsync();
+            var (sdName, _) = SoftDeleteHelper.Resolve(typeof(T));
             var sql = $"SELECT {SelectColumnList()} FROM {Q(_tableName)}";
+            if (sdName != null && !includeDeleted)
+                sql += $" WHERE {Q(sdName)} IS NULL";
             var results = new List<T>();
             using (var cmd = NewCommand(sql, _ambientTx))
             using (var reader = await cmd.ExecuteReaderAsync())
@@ -567,6 +631,22 @@ namespace LightOrm.Core.Sql
                         $"valor '{raw}' do tipo {raw?.GetType().Name ?? "null"}): {ex.Message}", ex);
                 }
             }
+
+            // SoftDelete: popula DeletedAt sem [Column] na propriedade.
+            var (sdName, sdProp) = SoftDeleteHelper.Resolve(typeof(T));
+            if (sdName != null)
+            {
+                try
+                {
+                    int ord = reader.GetOrdinal(sdName);
+                    if (!reader.IsDBNull(ord))
+                    {
+                        var raw = reader.GetValue(ord);
+                        sdProp.SetValue(instance, _dialect.FromDbValue(raw, typeof(DateTime?)));
+                    }
+                }
+                catch (IndexOutOfRangeException) { /* coluna ausente, ignora */ }
+            }
         }
 
         private IEnumerable<(ColumnAttribute col, PropertyInfo prop)> WritableColumns(bool skipAutoIncrement)
@@ -583,6 +663,10 @@ namespace LightOrm.Core.Sql
                 if (skipAutoIncrement && effective.AutoIncrement) continue;
                 yield return (col, prop);
             }
+            // SoftDelete: DeletedAt entra no INSERT/UPDATE como coluna virtual.
+            var (sdName, sdProp) = SoftDeleteHelper.Resolve(typeof(T));
+            if (sdName != null)
+                yield return (new ColumnAttribute(sdName), sdProp);
         }
 
         private static PropertyInfo GetIdProperty()

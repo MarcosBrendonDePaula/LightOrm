@@ -167,16 +167,29 @@ namespace LightOrm.Core.Sql
             return string.Join(", ", cols);
         }
 
+        // Permite que o repositório oferecer "IncludingDeleted" desligue o filtro.
+        internal bool IncludeDeleted { get; set; }
+
         private (string sql, List<(string name, object value, Type type)> parameters) BuildSelectSql(string projection)
         {
             var sb = new System.Text.StringBuilder();
             sb.Append("SELECT ").Append(projection).Append(" FROM ").Append(Q(_tableName));
 
             var parameters = new List<(string, object, Type)>();
+            var (sdName, _) = SoftDeleteHelper.Resolve(typeof(T));
+            var hasSoftFilter = sdName != null && !IncludeDeleted;
 
-            if (_conditions.Count > 0)
+            if (_conditions.Count > 0 || hasSoftFilter)
             {
                 sb.Append(" WHERE ");
+                if (hasSoftFilter)
+                {
+                    sb.Append(Q(sdName)).Append(" IS NULL");
+                    if (_conditions.Count > 0) sb.Append(" AND ");
+                }
+            }
+            if (_conditions.Count > 0)
+            {
                 for (int i = 0; i < _conditions.Count; i++)
                 {
                     var (column, op, value) = _conditions[i];
