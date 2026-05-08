@@ -48,4 +48,16 @@ namespace LightOrm.Core.Tests.Models
         [Column("parent_id")]
         public int? ParentId { get; set; }
     }
+
+    public class VersionedModel : BaseModel<VersionedModel, int>
+    {
+        public override string TableName => "versioned";
+
+        [Column("name", length: 100)]
+        public string Name { get; set; }
+
+        [Column("row_version")]
+        [Version]
+        public int RowVersion { get; set; }
+    }
 }
