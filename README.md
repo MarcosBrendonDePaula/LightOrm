@@ -1,12 +1,13 @@
 # LightOrm
 
-ORM leve em C# com suporte a múltiplos bancos via abstração `IRepository<T, TId>` + `IDialect`. Hoje cobre **MySQL**, **SQLite** e **MongoDB**, e funciona em aplicações .NET Standard 2.1 e Unity.
+ORM leve em C# com suporte a múltiplos bancos via abstração `IRepository<T, TId>` + `IDialect`. Hoje cobre **MySQL**, **SQLite**, **PostgreSQL** e **MongoDB**, e funciona em aplicações .NET Standard 2.1 e Unity.
 
 ## Arquitetura
 
 - `LightOrm.Core` — `BaseModel<T, TId>` (metadados), `IRepository<T, TId>`, atributos, `SqlRepository<T, TId>` agnóstico de provider, `IDialect`. Zero dependência de driver.
 - `LightOrm.MySql` — `MySqlDialect` + helper `DatabaseConnection` (MySql.Data).
 - `LightOrm.Sqlite` — `SqliteDialect` (Microsoft.Data.Sqlite).
+- `LightOrm.Postgres` — `PostgresDialect` (Npgsql).
 - `LightOrm.Mongo` — `MongoRepository<T, TId>` sobre `IMongoCollection` (MongoDB.Driver).
 - `LightOrm.Unity` — `DatabaseManager` MonoBehaviour para integração no Editor.
 
@@ -18,6 +19,7 @@ Referencie o `LightOrm.Core` mais o(s) provider(s) que você precisa:
 
 - MySQL: `LightOrm.Core` + `LightOrm.MySql`
 - SQLite: `LightOrm.Core` + `LightOrm.Sqlite`
+- PostgreSQL: `LightOrm.Core` + `LightOrm.Postgres`
 - MongoDB: `LightOrm.Core` + `LightOrm.Mongo`
 
 Para Unity, copie os DLLs compilados (`LightOrm.Core.dll`, `LightOrm.Unity.dll`, `LightOrm.MySql.dll`, `MySql.Data.dll`) para `Assets/Plugins`.
@@ -107,6 +109,18 @@ await repo.EnsureSchemaAsync();
 // ...mesma API.
 ```
 
+### PostgreSQL
+
+```csharp
+using Npgsql;
+using LightOrm.Postgres;
+
+using var conn = new NpgsqlConnection("Host=localhost;Database=app;Username=postgres;Password=...");
+var repo = new SqlRepository<UserModel, int>(conn, new PostgresDialect());
+await repo.EnsureSchemaAsync();
+// ...mesma API; AUTO_INCREMENT vira SERIAL/BIGSERIAL automaticamente.
+```
+
 ### MongoDB
 
 ```csharp
@@ -150,11 +164,35 @@ dotnet build LightOrm.sln
 dotnet test  LightOrm.Core.Tests/LightOrm.Core.Tests.csproj
 ```
 
-Os testes assumem MySQL local em `localhost:3307` (root/`my-secret-pw`) e MongoDB em `localhost:27017`. SQLite roda in-memory sem dependência externa. Suba os serviços via Docker:
+Os testes assumem MySQL local em `localhost:3307` (root/`my-secret-pw`), PostgreSQL em `localhost:5433` (postgres/`my-secret-pw`) e MongoDB em `localhost:27017`. SQLite roda in-memory sem dependência externa. Suba os serviços via Docker:
 
 ```
-docker run -d --name lightorm-mysql -p 3307:3306 -e MYSQL_ROOT_PASSWORD=my-secret-pw mysql:8
-docker run -d --name lightorm-mongo -p 27017:27017 mongo:7
+docker run -d --name lightorm-mysql    -p 3307:3306  -e MYSQL_ROOT_PASSWORD=my-secret-pw  mysql:8
+docker run -d --name lightorm-postgres -p 5433:5432  -e POSTGRES_PASSWORD=my-secret-pw    postgres:16
+docker run -d --name lightorm-mongo    -p 27017:27017                                     mongo:7
+```
+
+## Transações
+
+Para operar várias entidades atomicamente, abra uma `DbTransaction` e passe para os repositórios:
+
+```csharp
+using var tx = connection.BeginTransaction();
+var users = new SqlRepository<User, int>(connection, dialect, tx);
+var orders = new SqlRepository<Order, int>(connection, dialect, tx);
+await users.SaveAsync(...);
+await orders.SaveAsync(...);
+tx.Commit();   // ou tx.Rollback()
+```
+
+`SaveManyAsync` e `FindByIdAsync(includeRelated: true)` respeitam a transação ambiente.
+
+## Batch save
+
+`SaveManyAsync(entities)` insere/atualiza um conjunto numa única transação (uma chamada `InsertManyAsync` no Mongo para os novos):
+
+```csharp
+await repo.SaveManyAsync(new[] { user1, user2, user3 });
 ```
 
 ## Limitações conhecidas
