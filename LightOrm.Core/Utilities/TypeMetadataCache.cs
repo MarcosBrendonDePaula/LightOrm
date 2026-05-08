@@ -15,6 +15,9 @@ namespace LightOrm.Core.Utilities
         private static readonly ConcurrentDictionary<PropertyInfo, ManyToManyAttribute> _manyToManyAttributeCache = new ConcurrentDictionary<PropertyInfo, ManyToManyAttribute>();
         private static readonly ConcurrentDictionary<PropertyInfo, EmbeddedAttribute> _embeddedAttributeCache = new ConcurrentDictionary<PropertyInfo, EmbeddedAttribute>();
         private static readonly ConcurrentDictionary<PropertyInfo, VersionAttribute> _versionAttributeCache = new ConcurrentDictionary<PropertyInfo, VersionAttribute>();
+        private static readonly ConcurrentDictionary<PropertyInfo, IndexAttribute> _indexAttributeCache = new ConcurrentDictionary<PropertyInfo, IndexAttribute>();
+        private static readonly ConcurrentDictionary<PropertyInfo, UniqueAttribute> _uniqueAttributeCache = new ConcurrentDictionary<PropertyInfo, UniqueAttribute>();
+        private static readonly ConcurrentDictionary<Type, TableAttribute> _tableAttributeCache = new ConcurrentDictionary<Type, TableAttribute>();
 
         public static PropertyInfo[] GetProperties(Type type)
         {
@@ -54,6 +57,21 @@ namespace LightOrm.Core.Utilities
         public static VersionAttribute GetVersionAttribute(PropertyInfo property)
         {
             return _versionAttributeCache.GetOrAdd(property, p => p.GetCustomAttribute<VersionAttribute>());
+        }
+
+        public static IndexAttribute GetIndexAttribute(PropertyInfo property)
+        {
+            return _indexAttributeCache.GetOrAdd(property, p => p.GetCustomAttribute<IndexAttribute>());
+        }
+
+        public static UniqueAttribute GetUniqueAttribute(PropertyInfo property)
+        {
+            return _uniqueAttributeCache.GetOrAdd(property, p => p.GetCustomAttribute<UniqueAttribute>());
+        }
+
+        public static TableAttribute GetTableAttribute(Type type)
+        {
+            return _tableAttributeCache.GetOrAdd(type, t => t.GetCustomAttribute<TableAttribute>(inherit: true));
         }
     }
 }
