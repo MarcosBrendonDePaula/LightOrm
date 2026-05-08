@@ -190,6 +190,19 @@ Operadores: `=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `NOT LIKE`. Em Mongo,
 
 Nomes de propriedade são resolvidos contra o modelo (use `nameof(...)`); valores desconhecidos viram `ArgumentException` antes de tocar o banco. Operadores fora da whitelist também são rejeitados.
 
+### Grupos OR (`WhereAny`)
+
+```csharp
+var moderators = await repo.Query()
+    .Where(nameof(User.Active), true)
+    .WhereAny(
+        (nameof(User.Role), "=", "admin"),
+        (nameof(User.Role), "=", "moderator"))
+    .ToListAsync();
+// SQL:   WHERE active = ? AND (role = ? OR role = ?)
+// Mongo: { active: true, $or: [{ role: 'admin' }, { role: 'moderator' }] }
+```
+
 ## Upsert
 
 Quando o caller controla o id (string/Guid):
@@ -205,14 +218,61 @@ await repo.UpsertAsync(u);   // atualiza — preserva CreatedAt original
 
 | Atributo | Onde |
 |---|---|
+| `[Table(name)]` | Define o nome da tabela/coleção sem precisar override de `TableName`. |
 | `[Column(name, length, isPrimaryKey, autoIncrement, isUnsigned)]` | Mapeia propriedade para coluna/campo. Obrigatório nos campos persistidos. |
 | `[ForeignKey(referenceTable, referenceColumn)]` | Gera `FOREIGN KEY` no `CREATE TABLE`. SQL apenas. |
-| `[OneToOne(fkProperty, relatedType)]` | Navigation property 1:1. SQL apenas. |
-| `[OneToMany(fkProperty, relatedType)]` | Coleção 1:N. SQL apenas. |
+| `[OneToOne(fkProperty, relatedType, cascade?)]` | Navigation property 1:1. `cascade: true` salva o filho junto. SQL apenas. |
+| `[OneToMany(fkProperty, relatedType, cascade?)]` | Coleção 1:N. `cascade: true` salva os filhos junto. SQL apenas. |
 | `[ManyToMany(relatedType, associationTable, sourceFK, targetFK)]` | N:N via tabela de associação. SQL apenas. |
 | `[Embedded]` | Subdocumento aninhado (1:1 ou array 1:N). MongoDB apenas; ignorado em SQL. |
+| `[Index(name?, unique?)]` | Cria índice em `EnsureSchemaAsync`. Mesmo `name` em várias propriedades = índice composto. SQL apenas. |
+| `[Unique]` | Atalho para `UNIQUE INDEX` dedicado em uma coluna. SQL apenas. |
+| `[Version]` | Optimistic locking em propriedade `int`/`long`. Update incrementa e checa versão; conflito lança `DbConcurrencyException`. SQL apenas. |
 
 Subdocumentos `[Embedded]` são POCO comum — não precisam herdar `BaseModel`.
+
+## Optimistic locking
+
+```csharp
+public class Order : BaseModel<Order, int>
+{
+    public override string TableName => "orders";
+    [Column("total")] public decimal Total { get; set; }
+    [Column("row_version")] [Version] public int RowVersion { get; set; }
+}
+
+try { await repo.SaveAsync(order); }
+catch (DbConcurrencyException) {
+    // outro processo modificou a linha desde que você leu — recarregue e tente de novo
+}
+```
+
+Insert inicializa em 1; cada update incrementa e adiciona `AND row_version = @oldVersion` ao WHERE. Se nada for atualizado, lança e o valor em memória é revertido para o original (permite reload + retry sem estado inconsistente).
+
+## Save em cascata
+
+Opt-in via `cascade: true` no atributo de relacionamento. Salva pai e filhos numa única transação:
+
+```csharp
+public class Parent : BaseModel<Parent, int>
+{
+    public override string TableName => "parents";
+    [Column("name")] public string Name { get; set; }
+
+    [OneToMany("parent_id", typeof(Child), cascade: true)]
+    public Child[] Children { get; set; }
+}
+
+var p = new Parent
+{
+    Name = "p",
+    Children = new[] { new Child { Label = "c1" }, new Child { Label = "c2" } }
+};
+await parents.SaveAsync(p);
+// p.Id preenchido; cada Child.Id preenchido; Child.ParentId = p.Id; tudo na mesma tx.
+```
+
+Se qualquer filho falhar, a transação inteira é revertida. Update misturando filhos novos e existentes funciona da mesma forma.
 
 ## Unity
 
@@ -273,11 +333,11 @@ await repo.SaveManyAsync(new[] { user1, user2, user3 });
 
 ## Limitações conhecidas
 
-- Sem cascata em `SaveAsync`/`DeleteAsync` — gerencie FKs manualmente.
+- Cascata em `SaveAsync` é opt-in e não cobre `ManyToMany`. `DeleteAsync` ainda não tem cascata.
 - Carregamento eager apenas (`includeRelated: true`); não há lazy loading.
 - `MongoRepository` não traduz `[OneToMany]`/`[ManyToMany]` via `$lookup`. Use `[Embedded]` para relacionamentos no Mongo.
-- Query builder cobre filtros simples (`Where`/`WhereIn`/`OrderBy`/`Take`/`Skip`/`Count`/`Any`); JOINs, GROUP BY e expressões complexas exigem SQL/BSON manual.
-- Sem optimistic locking embutido — concorrência alta requer estratégia própria.
+- Query builder cobre filtros simples (`Where`/`WhereIn`/`WhereAny`/`OrderBy`/`Take`/`Skip`/`Count`/`Any`); JOINs e GROUP BY exigem SQL manual.
+- Optimistic locking via `[Version]` está disponível em SQL apenas; Mongo ainda não.
 
 ## Licença
 
