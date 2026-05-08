@@ -118,30 +118,79 @@ namespace LightOrm.Mongo
             await _collection.DeleteOneAsync(filter);
         }
 
-        private BsonDocument ToBson(T entity)
+        private BsonDocument ToBson(T entity) => ToBsonAny(entity, typeof(T));
+
+        private static BsonDocument ToBsonAny(object entity, Type entityType)
         {
+            if (entity == null) return null;
             var doc = new BsonDocument();
-            foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
+            foreach (var prop in TypeMetadataCache.GetProperties(entityType))
             {
+                if (TypeMetadataCache.GetEmbeddedAttribute(prop) != null)
+                {
+                    var fieldName = ResolveEmbeddedFieldName(prop);
+                    var value = prop.GetValue(entity);
+                    doc[fieldName] = SerializeEmbedded(prop.PropertyType, value);
+                    continue;
+                }
+
                 var col = TypeMetadataCache.GetColumnAttribute(prop);
                 if (col == null) continue;
-                var value = prop.GetValue(entity);
-                var fieldName = col.IsPrimaryKey ? "_id" : col.Name;
-                doc[fieldName] = value == null ? BsonNull.Value : BsonValue.Create(value);
+                var raw = prop.GetValue(entity);
+                var name = col.IsPrimaryKey ? "_id" : col.Name;
+                doc[name] = raw == null ? BsonNull.Value : BsonValue.Create(raw);
             }
             return doc;
         }
 
-        private T FromBson(BsonDocument doc)
+        private static BsonValue SerializeEmbedded(Type propertyType, object value)
         {
-            var instance = new T();
-            foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
+            if (value == null) return BsonNull.Value;
+
+            var elementType = propertyType.GetElementType()
+                              ?? (propertyType.IsGenericType ? propertyType.GetGenericArguments()[0] : null);
+
+            if (elementType != null && value is System.Collections.IEnumerable enumerable)
             {
+                var array = new BsonArray();
+                foreach (var item in enumerable)
+                    array.Add(item == null ? BsonNull.Value : (BsonValue)ToBsonAny(item, elementType));
+                return array;
+            }
+
+            return ToBsonAny(value, propertyType);
+        }
+
+        private static string ResolveEmbeddedFieldName(PropertyInfo prop)
+        {
+            // Permite [Column("nome")] em conjunto com [Embedded] para customizar o
+            // nome do campo. Caso contrário usa o nome da propriedade C#.
+            var col = TypeMetadataCache.GetColumnAttribute(prop);
+            return col?.Name ?? prop.Name;
+        }
+
+        private T FromBson(BsonDocument doc) => (T)FromBsonAny(doc, typeof(T));
+
+        private static object FromBsonAny(BsonDocument doc, Type targetType)
+        {
+            var instance = Activator.CreateInstance(targetType);
+            foreach (var prop in TypeMetadataCache.GetProperties(targetType))
+            {
+                if (!prop.CanWrite) continue;
+
+                if (TypeMetadataCache.GetEmbeddedAttribute(prop) != null)
+                {
+                    var fieldName = ResolveEmbeddedFieldName(prop);
+                    if (!doc.Contains(fieldName) || doc[fieldName].IsBsonNull) continue;
+                    prop.SetValue(instance, DeserializeEmbedded(prop.PropertyType, doc[fieldName]));
+                    continue;
+                }
+
                 var col = TypeMetadataCache.GetColumnAttribute(prop);
-                if (col == null || !prop.CanWrite) continue;
-                var fieldName = col.IsPrimaryKey ? "_id" : col.Name;
-                if (!doc.Contains(fieldName)) continue;
-                var bson = doc[fieldName];
+                if (col == null) continue;
+                var name = col.IsPrimaryKey ? "_id" : col.Name;
+                if (!doc.Contains(name)) continue;
+                var bson = doc[name];
                 if (bson.IsBsonNull) continue;
 
                 var underlying = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
@@ -158,6 +207,38 @@ namespace LightOrm.Mongo
                 prop.SetValue(instance, value);
             }
             return instance;
+        }
+
+        private static object DeserializeEmbedded(Type propertyType, BsonValue bson)
+        {
+            var elementType = propertyType.GetElementType()
+                              ?? (propertyType.IsGenericType ? propertyType.GetGenericArguments()[0] : null);
+
+            if (elementType != null && bson is BsonArray array)
+            {
+                var items = array
+                    .Where(b => !b.IsBsonNull)
+                    .Select(b => FromBsonAny(b.AsBsonDocument, elementType))
+                    .ToArray();
+
+                if (propertyType.IsArray)
+                {
+                    var result = Array.CreateInstance(elementType, items.Length);
+                    for (int i = 0; i < items.Length; i++) result.SetValue(items[i], i);
+                    return result;
+                }
+
+                // List<T> ou IEnumerable<T> — devolve List<T>.
+                var listType = typeof(System.Collections.Generic.List<>).MakeGenericType(elementType);
+                var list = (System.Collections.IList)Activator.CreateInstance(listType);
+                foreach (var item in items) list.Add(item);
+                return list;
+            }
+
+            if (bson is BsonDocument subDoc)
+                return FromBsonAny(subDoc, propertyType);
+
+            return null;
         }
 
         private static PropertyInfo ResolveIdProperty()
