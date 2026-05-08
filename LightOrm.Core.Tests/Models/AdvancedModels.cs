@@ -71,6 +71,45 @@ namespace LightOrm.Core.Tests.Models
         public int ParentId { get; set; }
     }
 
+    public class HookTrackingModel : BaseModel<HookTrackingModel, int>
+    {
+        public override string TableName => "hook_tracking";
+
+        [Column("name", length: 50)]
+        public string Name { get; set; }
+
+        // Não [Column] — é só estado em memória pra teste verificar.
+        public System.Collections.Generic.List<string> Events { get; set; }
+            = new System.Collections.Generic.List<string>();
+
+        protected internal override void OnBeforeSave(bool isInsert)
+            => Events.Add(isInsert ? "before-insert" : "before-update");
+        protected internal override void OnAfterSave(bool isInsert)
+            => Events.Add(isInsert ? "after-insert" : "after-update");
+        protected internal override void OnBeforeDelete() => Events.Add("before-delete");
+        protected internal override void OnAfterDelete() => Events.Add("after-delete");
+        protected internal override void OnAfterLoad() => Events.Add("after-load");
+    }
+
+    public class ValidatedModel : BaseModel<ValidatedModel, int>
+    {
+        public override string TableName => "validated";
+
+        [Column("email", length: 255)]
+        [LightOrm.Core.Validation.Required]
+        [LightOrm.Core.Validation.RegEx(@"^[^@]+@[^@]+$")]
+        public string Email { get; set; }
+
+        [Column("nickname", length: 50)]
+        [LightOrm.Core.Validation.MinLength(3)]
+        [LightOrm.Core.Validation.MaxLength(20)]
+        public string Nickname { get; set; }
+
+        [Column("age")]
+        [LightOrm.Core.Validation.Range(0, 150)]
+        public int Age { get; set; }
+    }
+
     [Table("table_attr_demo")]
     public class TableAttributeModel : BaseModel<TableAttributeModel, int>
     {

@@ -101,7 +101,13 @@ namespace LightOrm.Mongo
             if (_skip.HasValue) find = find.Skip(_skip.Value);
             if (_limit.HasValue) find = find.Limit(_limit.Value);
             var docs = await find.ToListAsync();
-            return docs.Select(_hydrate).ToList();
+            var results = docs.Select(_hydrate).ToList();
+            foreach (var r in results)
+            {
+                r.OnAfterLoad();
+                await r.OnAfterLoadAsync();
+            }
+            return results;
         }
 
         public async Task<T> FirstOrDefaultAsync()

@@ -110,6 +110,10 @@ namespace LightOrm.Mongo
             var isNew = IsDefaultId(idValue);
             var now = DateTime.UtcNow;
 
+            entity.OnBeforeSave(isNew);
+            await entity.OnBeforeSaveAsync(isNew);
+            LightOrm.Core.Validation.ModelValidator.Validate(entity);
+
             if (isNew)
             {
                 entity.CreatedAt = now;
@@ -133,6 +137,9 @@ namespace LightOrm.Mongo
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", doc["_id"]);
                 await _collection.ReplaceOneAsync(filter, doc, new ReplaceOptions { IsUpsert = true });
             }
+
+            entity.OnAfterSave(isNew);
+            await entity.OnAfterSaveAsync(isNew);
             return entity;
         }
 
@@ -140,20 +147,34 @@ namespace LightOrm.Mongo
         {
             var filter = Builders<BsonDocument>.Filter.Eq("_id", BsonValue.Create(id));
             var doc = await _collection.Find(filter).FirstOrDefaultAsync();
-            return doc == null ? null : FromBson(doc);
+            if (doc == null) return null;
+            var instance = FromBson(doc);
+            instance.OnAfterLoad();
+            await instance.OnAfterLoadAsync();
+            return instance;
         }
 
         public async Task<List<T>> FindAllAsync(bool includeRelated = false)
         {
             var docs = await _collection.Find(FilterDefinition<BsonDocument>.Empty).ToListAsync();
-            return docs.Select(FromBson).ToList();
+            var results = docs.Select(FromBson).ToList();
+            foreach (var r in results)
+            {
+                r.OnAfterLoad();
+                await r.OnAfterLoadAsync();
+            }
+            return results;
         }
 
         public async Task DeleteAsync(T entity)
         {
+            entity.OnBeforeDelete();
+            await entity.OnBeforeDeleteAsync();
             var idValue = _idProp.GetValue(entity);
             var filter = Builders<BsonDocument>.Filter.Eq("_id", BsonValue.Create(idValue));
             await _collection.DeleteOneAsync(filter);
+            entity.OnAfterDelete();
+            await entity.OnAfterDeleteAsync();
         }
 
         private BsonDocument ToBson(T entity) => ToBsonAny(entity, typeof(T));

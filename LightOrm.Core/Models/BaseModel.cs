@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using LightOrm.Core.Attributes;
 
 namespace LightOrm.Core.Models
@@ -33,5 +34,23 @@ namespace LightOrm.Core.Models
         public DateTime UpdatedAt { get; set; }
 
         public string GetTableName() => TableName;
+
+        // ---------- Hooks ----------
+        // Override para validar, normalizar, gerar valores derivados, etc.
+        // BeforeSave roda antes do INSERT/UPDATE; AfterSave depois do commit.
+        // BeforeDelete antes do DELETE; AfterDelete depois.
+        // AfterLoad é chamado após hidratar a entidade do banco.
+        // Versões síncronas existem para conveniência; o repositório aguarda
+        // ambas (a Async é chamada após a síncrona).
+        protected internal virtual void OnBeforeSave(bool isInsert) { }
+        protected internal virtual Task OnBeforeSaveAsync(bool isInsert) => Task.CompletedTask;
+        protected internal virtual void OnAfterSave(bool isInsert) { }
+        protected internal virtual Task OnAfterSaveAsync(bool isInsert) => Task.CompletedTask;
+        protected internal virtual void OnBeforeDelete() { }
+        protected internal virtual Task OnBeforeDeleteAsync() => Task.CompletedTask;
+        protected internal virtual void OnAfterDelete() { }
+        protected internal virtual Task OnAfterDeleteAsync() => Task.CompletedTask;
+        protected internal virtual void OnAfterLoad() { }
+        protected internal virtual Task OnAfterLoadAsync() => Task.CompletedTask;
     }
 }
