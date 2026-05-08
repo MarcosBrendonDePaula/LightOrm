@@ -23,6 +23,8 @@ namespace LightOrm.Core.Sql
         private readonly DbTransaction _ambientTx;
         private readonly string _tableName;
 
+        // Cada item é uma condição simples OR um grupo OR. Grupos têm Operator="OR_GROUP"
+        // e Value é um List<(string col, string op, object val)>.
         private readonly List<(string column, string op, object value)> _conditions = new List<(string, string, object)>();
         private readonly List<(string column, bool desc)> _orderBy = new List<(string, bool)>();
         private int? _limit;
@@ -49,6 +51,20 @@ namespace LightOrm.Core.Sql
         public IQuery<T, TId> WhereIn(string propertyName, IEnumerable<object> values)
         {
             _conditions.Add((ResolveColumnName(propertyName), "IN", values?.ToList() ?? new List<object>()));
+            return this;
+        }
+
+        public IQuery<T, TId> WhereAny(params (string property, string op, object value)[] conditions)
+        {
+            if (conditions == null || conditions.Length == 0)
+                throw new ArgumentException("WhereAny requer ao menos uma condição.", nameof(conditions));
+            var resolved = new List<(string, string, object)>();
+            foreach (var c in conditions)
+            {
+                ValidateOperator(c.op);
+                resolved.Add((ResolveColumnName(c.property), c.op, c.value));
+            }
+            _conditions.Add(("__OR_GROUP", "OR_GROUP", resolved));
             return this;
         }
 
@@ -165,7 +181,6 @@ namespace LightOrm.Core.Sql
                         var values = (List<object>)value;
                         if (values.Count == 0)
                         {
-                            // IN () é inválido em SQL; gera condição sempre falsa.
                             sb.Append("1 = 0");
                             continue;
                         }
@@ -177,6 +192,20 @@ namespace LightOrm.Core.Sql
                             parameters.Add((pname, values[j], values[j]?.GetType() ?? typeof(object)));
                         }
                         sb.Append(Q(column)).Append(" IN (").Append(string.Join(", ", names)).Append(')');
+                    }
+                    else if (op == "OR_GROUP")
+                    {
+                        var group = (List<(string col, string op, object val)>)value;
+                        sb.Append('(');
+                        for (int j = 0; j < group.Count; j++)
+                        {
+                            var (gc, go, gv) = group[j];
+                            if (j > 0) sb.Append(" OR ");
+                            var pname = $"p{i}_{j}";
+                            sb.Append(Q(gc)).Append(' ').Append(go).Append(' ').Append(P(pname));
+                            parameters.Add((pname, gv, gv?.GetType() ?? typeof(object)));
+                        }
+                        sb.Append(')');
                     }
                     else
                     {

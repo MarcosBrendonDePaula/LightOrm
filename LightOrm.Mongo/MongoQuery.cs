@@ -50,11 +50,21 @@ namespace LightOrm.Mongo
                        ?? new List<BsonValue>();
             if (list.Count == 0)
             {
-                // IN vazio: filtro impossível.
                 _filters.Add(Builders<BsonDocument>.Filter.Eq("__never", "__never"));
                 return this;
             }
             _filters.Add(Builders<BsonDocument>.Filter.In(field, list));
+            return this;
+        }
+
+        public IQuery<T, TId> WhereAny(params (string property, string op, object value)[] conditions)
+        {
+            if (conditions == null || conditions.Length == 0)
+                throw new ArgumentException("WhereAny requer ao menos uma condição.", nameof(conditions));
+            var subs = new List<FilterDefinition<BsonDocument>>();
+            foreach (var c in conditions)
+                subs.Add(BuildFilter(ResolveFieldName(c.property), c.op, c.value));
+            _filters.Add(Builders<BsonDocument>.Filter.Or(subs));
             return this;
         }
 

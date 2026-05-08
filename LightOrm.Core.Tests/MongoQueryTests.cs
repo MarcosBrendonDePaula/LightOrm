@@ -121,6 +121,18 @@ namespace LightOrm.Core.Tests
         }
 
         [Fact]
+        public async Task WhereAny_combines_conditions_with_OR()
+        {
+            var repo = await Seed();
+            var result = await repo.Query()
+                .WhereAny(
+                    (nameof(TestUserMongoModel.UserName), "=", "user-01"),
+                    (nameof(TestUserMongoModel.UserName), "=", "user-05"))
+                .ToListAsync();
+            Assert.Equal(2, result.Count);
+        }
+
+        [Fact]
         public async Task Invalid_property_throws_clear_error()
         {
             var repo = await Seed();
