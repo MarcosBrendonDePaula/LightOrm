@@ -37,6 +37,65 @@ namespace LightOrm.Core.Sql
 
         public IQuery<T, TId> Query() => new SqlQuery<T, TId>(_connection, _dialect, _ambientTx);
 
+        /// <summary>
+        /// Executa SQL bruto e materializa as linhas em T usando o mesmo Populate
+        /// dos demais métodos. Parâmetros são passados como pares (nome, valor)
+        /// — o caller usa o prefixo do dialect (ex.: "@id" no MySQL).
+        /// </summary>
+        public async Task<List<T>> RawAsync(string sql, IDictionary<string, object> parameters = null)
+        {
+            if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentException("SQL vazio.", nameof(sql));
+            await EnsureOpenAsync();
+            using var cmd = NewCommand(sql, _ambientTx);
+            if (parameters != null)
+            {
+                foreach (var kv in parameters)
+                {
+                    var p = cmd.CreateParameter();
+                    p.ParameterName = kv.Key.StartsWith(_dialect.ParameterPrefix)
+                        ? kv.Key
+                        : _dialect.ParameterPrefix + kv.Key;
+                    p.Value = kv.Value == null ? DBNull.Value
+                        : (_dialect.ToDbValue(kv.Value, kv.Value.GetType()) ?? DBNull.Value);
+                    cmd.Parameters.Add(p);
+                }
+            }
+
+            var results = new List<T>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var instance = new T();
+                Populate(reader, instance);
+                results.Add(instance);
+            }
+            foreach (var r in results)
+            {
+                r.OnAfterLoad();
+                await r.OnAfterLoadAsync();
+            }
+            return results;
+        }
+
+        /// <summary>
+        /// Procura por filtro; se não encontrar, salva defaults.
+        /// Útil para "garantir que exista" — common usecase em Sequelize.
+        /// </summary>
+        public async Task<(T entity, bool created)> FindOrCreateAsync(
+            Action<IQuery<T, TId>> filter, T defaults)
+        {
+            if (filter == null) throw new ArgumentNullException(nameof(filter));
+            if (defaults == null) throw new ArgumentNullException(nameof(defaults));
+
+            var q = Query();
+            filter(q);
+            var existing = await q.FirstOrDefaultAsync();
+            if (existing != null) return (existing, false);
+
+            await SaveAsync(defaults);
+            return (defaults, true);
+        }
+
         // Devolve (tx, owned). Quando há tx ambiente, owned=false e o caller
         // não deve commit/rollback. Quando não há, abre uma nova owned=true.
         private (DbTransaction tx, bool owned) BeginOrUseTx()
