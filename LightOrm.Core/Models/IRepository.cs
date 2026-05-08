@@ -7,6 +7,7 @@ namespace LightOrm.Core.Models
     {
         Task EnsureSchemaAsync();
         Task<T> SaveAsync(T entity);
+        Task<IReadOnlyList<T>> SaveManyAsync(IEnumerable<T> entities);
         Task<T> FindByIdAsync(TId id, bool includeRelated = false);
         Task<List<T>> FindAllAsync(bool includeRelated = false);
         Task DeleteAsync(T entity);

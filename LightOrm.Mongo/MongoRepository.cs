@@ -29,6 +29,18 @@ namespace LightOrm.Mongo
 
         public Task EnsureSchemaAsync() => Task.CompletedTask; // Mongo é schemaless.
 
+        public async Task<System.Collections.Generic.IReadOnlyList<T>> SaveManyAsync(System.Collections.Generic.IEnumerable<T> entities)
+        {
+            if (entities == null) throw new ArgumentNullException(nameof(entities));
+            var list = new System.Collections.Generic.List<T>();
+            foreach (var entity in entities)
+            {
+                await SaveAsync(entity);
+                list.Add(entity);
+            }
+            return list;
+        }
+
         public async Task<T> SaveAsync(T entity)
         {
             var idValue = _idProp.GetValue(entity);

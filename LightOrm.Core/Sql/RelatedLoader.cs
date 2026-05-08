@@ -17,6 +17,20 @@ namespace LightOrm.Core.Sql
     /// </summary>
     internal static class RelatedLoader
     {
+        // Limite por batch ao construir cláusulas IN (...). Mantém os parâmetros
+        // bem abaixo do teto de qualquer driver (Postgres ~32k, MySQL packet, etc.)
+        // sem prejudicar o caso comum de poucos pais.
+        private const int InClauseChunkSize = 500;
+
+        private static string BuildSelectColumns(IDialect dialect, Type type)
+        {
+            var cols = TypeMetadataCache.GetProperties(type)
+                .Select(p => TypeMetadataCache.GetColumnAttribute(p))
+                .Where(c => c != null)
+                .Select(c => dialect.QuoteIdentifier(c.Name));
+            return string.Join(", ", cols);
+        }
+
         public static async Task LoadAsync(DbConnection connection, IDialect dialect,
             Type rootType, IList<object> instances)
         {
@@ -123,27 +137,38 @@ namespace LightOrm.Core.Sql
             var sourceCol = dialect.QuoteIdentifier(attr.SourceForeignKey);
             var targetCol = dialect.QuoteIdentifier(attr.TargetForeignKey);
             var relatedPkCol = dialect.QuoteIdentifier(GetPkColumnName(attr.RelatedType));
-
-            var (placeholders, addValues) = BuildInClause(dialect, "src", rootIds);
-            var sql = $"SELECT a.{sourceCol} AS __src, r.* FROM {assoc} a " +
-                      $"JOIN {related} r ON r.{relatedPkCol} = a.{targetCol} " +
-                      $"WHERE a.{sourceCol} IN ({placeholders})";
-
-            using var cmd = dialect.CreateCommand(connection);
-            cmd.CommandText = sql;
-            addValues(cmd);
+            // Lista de colunas explícita do tipo relacionado, prefixadas por r.
+            var relatedColumns = string.Join(", ",
+                TypeMetadataCache.GetProperties(attr.RelatedType)
+                    .Select(p => TypeMetadataCache.GetColumnAttribute(p))
+                    .Where(c => c != null)
+                    .Select(c => $"r.{dialect.QuoteIdentifier(c.Name)}"));
 
             var grouped = new Dictionary<object, List<object>>();
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+
+            for (int offset = 0; offset < rootIds.Count; offset += InClauseChunkSize)
             {
-                var srcOrdinal = reader.GetOrdinal("__src");
-                var srcValue = dialect.FromDbValue(reader.GetValue(srcOrdinal), rootPk.PropertyType);
-                var item = Activator.CreateInstance(attr.RelatedType);
-                PopulateInstance(reader, item, attr.RelatedType, dialect);
-                if (!grouped.TryGetValue(srcValue, out var list))
-                    grouped[srcValue] = list = new List<object>();
-                list.Add(item);
+                var chunk = rootIds.Skip(offset).Take(InClauseChunkSize).ToList();
+                var (placeholders, addValues) = BuildInClause(dialect, "src", chunk);
+                var sql = $"SELECT a.{sourceCol} AS __src, {relatedColumns} FROM {assoc} a " +
+                          $"JOIN {related} r ON r.{relatedPkCol} = a.{targetCol} " +
+                          $"WHERE a.{sourceCol} IN ({placeholders})";
+
+                using var cmd = dialect.CreateCommand(connection);
+                cmd.CommandText = sql;
+                addValues(cmd);
+
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var srcOrdinal = reader.GetOrdinal("__src");
+                    var srcValue = dialect.FromDbValue(reader.GetValue(srcOrdinal), rootPk.PropertyType);
+                    var item = Activator.CreateInstance(attr.RelatedType);
+                    PopulateInstance(reader, item, attr.RelatedType, dialect);
+                    if (!grouped.TryGetValue(srcValue, out var list))
+                        grouped[srcValue] = list = new List<object>();
+                    list.Add(item);
+                }
             }
 
             var elementType = navProp.PropertyType.GetElementType()
@@ -167,23 +192,28 @@ namespace LightOrm.Core.Sql
         {
             var pk = GetPkProperty(relatedType);
             var pkCol = TypeMetadataCache.GetColumnAttribute(pk).Name;
-            var (placeholders, addValues) = BuildInClause(dialect, "id", ids);
-
-            var sql = $"SELECT * FROM {dialect.QuoteIdentifier(relatedTable)} " +
-                      $"WHERE {dialect.QuoteIdentifier(pkCol)} IN ({placeholders})";
-
-            using var cmd = dialect.CreateCommand(connection);
-            cmd.CommandText = sql;
-            addValues(cmd);
-
+            var columns = BuildSelectColumns(dialect, relatedType);
             var result = new Dictionary<object, object>();
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+
+            for (int offset = 0; offset < ids.Count; offset += InClauseChunkSize)
             {
-                var instance = Activator.CreateInstance(relatedType);
-                PopulateInstance(reader, instance, relatedType, dialect);
-                var pkValue = pk.GetValue(instance);
-                if (pkValue != null) result[pkValue] = instance;
+                var chunk = ids.Skip(offset).Take(InClauseChunkSize).ToList();
+                var (placeholders, addValues) = BuildInClause(dialect, "id", chunk);
+                var sql = $"SELECT {columns} FROM {dialect.QuoteIdentifier(relatedTable)} " +
+                          $"WHERE {dialect.QuoteIdentifier(pkCol)} IN ({placeholders})";
+
+                using var cmd = dialect.CreateCommand(connection);
+                cmd.CommandText = sql;
+                addValues(cmd);
+
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var instance = Activator.CreateInstance(relatedType);
+                    PopulateInstance(reader, instance, relatedType, dialect);
+                    var pkValue = pk.GetValue(instance);
+                    if (pkValue != null) result[pkValue] = instance;
+                }
             }
             return result;
         }
@@ -192,27 +222,33 @@ namespace LightOrm.Core.Sql
             DbConnection connection, IDialect dialect, Type relatedType,
             string relatedTable, string columnName, IList<object> values)
         {
-            var (placeholders, addValues) = BuildInClause(dialect, "v", values);
-            var sql = $"SELECT * FROM {dialect.QuoteIdentifier(relatedTable)} " +
-                      $"WHERE {dialect.QuoteIdentifier(columnName)} IN ({placeholders})";
-
-            using var cmd = dialect.CreateCommand(connection);
-            cmd.CommandText = sql;
-            addValues(cmd);
-
+            var columns = BuildSelectColumns(dialect, relatedType);
+            var fkProp = ResolveColumnProperty(relatedType, columnName);
             var result = new List<(object, object)>();
-            using var reader = await cmd.ExecuteReaderAsync();
-            var fkOrdinal = -1;
-            while (await reader.ReadAsync())
+
+            for (int offset = 0; offset < values.Count; offset += InClauseChunkSize)
             {
-                if (fkOrdinal < 0) fkOrdinal = reader.GetOrdinal(columnName);
-                var instance = Activator.CreateInstance(relatedType);
-                PopulateInstance(reader, instance, relatedType, dialect);
-                var fkProp = ResolveColumnProperty(relatedType, columnName);
-                var fkValue = fkProp != null
-                    ? fkProp.GetValue(instance)
-                    : dialect.FromDbValue(reader.GetValue(fkOrdinal), typeof(object));
-                result.Add((fkValue, instance));
+                var chunk = values.Skip(offset).Take(InClauseChunkSize).ToList();
+                var (placeholders, addValues) = BuildInClause(dialect, "v", chunk);
+                var sql = $"SELECT {columns} FROM {dialect.QuoteIdentifier(relatedTable)} " +
+                          $"WHERE {dialect.QuoteIdentifier(columnName)} IN ({placeholders})";
+
+                using var cmd = dialect.CreateCommand(connection);
+                cmd.CommandText = sql;
+                addValues(cmd);
+
+                using var reader = await cmd.ExecuteReaderAsync();
+                var fkOrdinal = -1;
+                while (await reader.ReadAsync())
+                {
+                    if (fkOrdinal < 0) fkOrdinal = reader.GetOrdinal(columnName);
+                    var instance = Activator.CreateInstance(relatedType);
+                    PopulateInstance(reader, instance, relatedType, dialect);
+                    var fkValue = fkProp != null
+                        ? fkProp.GetValue(instance)
+                        : dialect.FromDbValue(reader.GetValue(fkOrdinal), typeof(object));
+                    result.Add((fkValue, instance));
+                }
             }
             return result;
         }

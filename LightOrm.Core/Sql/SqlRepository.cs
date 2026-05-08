@@ -228,12 +228,21 @@ namespace LightOrm.Core.Sql
             await cmd.ExecuteNonQueryAsync();
         }
 
+        private string SelectColumnList()
+        {
+            var cols = TypeMetadataCache.GetProperties(typeof(T))
+                .Select(p => TypeMetadataCache.GetColumnAttribute(p))
+                .Where(c => c != null)
+                .Select(c => Q(c.Name));
+            return string.Join(", ", cols);
+        }
+
         public async Task<T> FindByIdAsync(TId id, bool includeRelated = false)
         {
             await EnsureOpenAsync();
             var idProp = GetIdProperty();
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
-            var sql = $"SELECT * FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
+            var sql = $"SELECT {SelectColumnList()} FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
             using var cmd = NewCommand(sql);
             AddParam(cmd, idCol.Name, id, typeof(TId));
 
@@ -256,7 +265,7 @@ namespace LightOrm.Core.Sql
         public async Task<List<T>> FindAllAsync(bool includeRelated = false)
         {
             await EnsureOpenAsync();
-            var sql = $"SELECT * FROM {Q(_tableName)}";
+            var sql = $"SELECT {SelectColumnList()} FROM {Q(_tableName)}";
             var results = new List<T>();
             using (var cmd = NewCommand(sql))
             using (var reader = await cmd.ExecuteReaderAsync())
@@ -275,6 +284,96 @@ namespace LightOrm.Core.Sql
             return results;
         }
 
+        public async Task<IReadOnlyList<T>> SaveManyAsync(IEnumerable<T> entities)
+        {
+            if (entities == null) throw new ArgumentNullException(nameof(entities));
+            var list = entities.ToList();
+            if (list.Count == 0) return list;
+
+            await EnsureOpenAsync();
+            var idProp = GetIdProperty();
+            using var tx = _connection.BeginTransaction();
+            try
+            {
+                foreach (var entity in list)
+                {
+                    var idValue = idProp.GetValue(entity);
+                    if (IsDefaultId(idValue))
+                    {
+                        entity.CreatedAt = DateTime.UtcNow;
+                        entity.UpdatedAt = entity.CreatedAt;
+                        await InsertWithinTxAsync(entity, idProp, tx);
+                    }
+                    else
+                    {
+                        entity.UpdatedAt = DateTime.UtcNow;
+                        await UpdateWithinTxAsync(entity, idProp, tx);
+                    }
+                }
+                tx.Commit();
+                return list;
+            }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
+        }
+
+        private async Task InsertWithinTxAsync(T entity, PropertyInfo idProp, DbTransaction tx)
+        {
+            var writableCols = WritableColumns(skipAutoIncrement: true).ToList();
+            var colList = string.Join(", ", writableCols.Select(c => Q(c.col.Name)));
+            var paramList = string.Join(", ", writableCols.Select(c => P(c.col.Name)));
+            var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
+            var returning = IsAutoIncrement(idProp)
+                ? _dialect.GetInsertReturningClause(Q(idCol.Name))
+                : null;
+
+            var sql = string.IsNullOrEmpty(returning)
+                ? $"INSERT INTO {Q(_tableName)} ({colList}) VALUES ({paramList});"
+                : $"INSERT INTO {Q(_tableName)} ({colList}) VALUES ({paramList}) {returning};";
+
+            object rawId = null;
+            using (var cmd = NewCommand(sql, tx))
+            {
+                foreach (var (col, prop) in writableCols)
+                    AddParam(cmd, col.Name, prop.GetValue(entity), prop.PropertyType);
+                if (string.IsNullOrEmpty(returning))
+                    await cmd.ExecuteNonQueryAsync();
+                else
+                    rawId = await cmd.ExecuteScalarAsync();
+            }
+
+            if (IsAutoIncrement(idProp) && string.IsNullOrEmpty(returning))
+            {
+                using var idCmd = NewCommand(_dialect.GetLastInsertIdSql(), tx);
+                rawId = await idCmd.ExecuteScalarAsync();
+            }
+
+            if (IsAutoIncrement(idProp) && rawId != null && rawId != DBNull.Value)
+            {
+                var converted = Convert.ChangeType(rawId,
+                    Nullable.GetUnderlyingType(idProp.PropertyType) ?? idProp.PropertyType);
+                idProp.SetValue(entity, converted);
+            }
+        }
+
+        private async Task UpdateWithinTxAsync(T entity, PropertyInfo idProp, DbTransaction tx)
+        {
+            var writableCols = WritableColumns(skipAutoIncrement: true)
+                .Where(c => !c.col.IsPrimaryKey)
+                .ToList();
+            var setClause = string.Join(", ", writableCols.Select(c => $"{Q(c.col.Name)} = {P(c.col.Name)}"));
+            var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
+            var sql = $"UPDATE {Q(_tableName)} SET {setClause} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
+            using var cmd = NewCommand(sql, tx);
+            foreach (var (col, prop) in writableCols)
+                AddParam(cmd, col.Name, prop.GetValue(entity), prop.PropertyType);
+            AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
         private void Populate(DbDataReader reader, T instance)
         {
             foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
@@ -286,8 +385,17 @@ namespace LightOrm.Core.Sql
                 catch (IndexOutOfRangeException) { continue; }
                 if (reader.IsDBNull(ordinal)) continue;
                 var raw = reader.GetValue(ordinal);
-                var converted = _dialect.FromDbValue(raw, prop.PropertyType);
-                prop.SetValue(instance, converted);
+                try
+                {
+                    var converted = _dialect.FromDbValue(raw, prop.PropertyType);
+                    prop.SetValue(instance, converted);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Falha ao popular {typeof(T).Name}.{prop.Name} (coluna '{col.Name}', " +
+                        $"valor '{raw}' do tipo {raw?.GetType().Name ?? "null"}): {ex.Message}", ex);
+                }
             }
         }
 
