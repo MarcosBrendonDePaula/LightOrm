@@ -110,6 +110,30 @@ namespace LightOrm.Core.Tests.Models
         public int Age { get; set; }
     }
 
+    public class GrandparentModel : BaseModel<GrandparentModel, int>
+    {
+        public override string TableName => "grandparent";
+        [Column("name", length: 100)] public string Name { get; set; }
+        [OneToMany("grandparent_id", typeof(MidParentModel))]
+        public MidParentModel[] Mids { get; set; }
+    }
+
+    public class MidParentModel : BaseModel<MidParentModel, int>
+    {
+        public override string TableName => "midparent";
+        [Column("label", length: 100)] public string Label { get; set; }
+        [Column("grandparent_id")] public int GrandparentId { get; set; }
+        [OneToMany("midparent_id", typeof(LeafModel))]
+        public LeafModel[] Leaves { get; set; }
+    }
+
+    public class LeafModel : BaseModel<LeafModel, int>
+    {
+        public override string TableName => "leaf";
+        [Column("value", length: 100)] public string Value { get; set; }
+        [Column("midparent_id")] public int MidparentId { get; set; }
+    }
+
     [SoftDelete]
     public class SoftDeletedModel : BaseModel<SoftDeletedModel, int>
     {

@@ -23,10 +23,19 @@ namespace LightOrm.Core.Sql
             return string.Join(", ", cols);
         }
 
+        // Profundidade default do eager loading. 1 = só nível raiz. Aumentar
+        // permite carregar netos automaticamente; valores grandes podem estourar
+        // memória em grafos densos.
+        public const int DefaultDepth = 3;
+
+        public static Task LoadAsync(DbConnection connection, IDialect dialect,
+            Type rootType, IList<object> instances, DbTransaction tx = null) =>
+            LoadAsync(connection, dialect, rootType, instances, DefaultDepth, tx);
+
         public static async Task LoadAsync(DbConnection connection, IDialect dialect,
-            Type rootType, IList<object> instances, DbTransaction tx = null)
+            Type rootType, IList<object> instances, int depth, DbTransaction tx)
         {
-            if (instances == null || instances.Count == 0) return;
+            if (instances == null || instances.Count == 0 || depth <= 0) return;
 
             var props = TypeMetadataCache.GetProperties(rootType);
             var oneToOne = props.Where(p => TypeMetadataCache.GetOneToOneAttribute(p) != null).ToList();
@@ -41,6 +50,53 @@ namespace LightOrm.Core.Sql
 
             foreach (var prop in manyToMany)
                 await LoadManyToManyAsync(connection, dialect, rootType, instances, prop, tx);
+
+            // Recursão: para cada navigation property carregada, dispara load
+            // no tipo relacionado. Profundidade decrementa para limitar grafos
+            // muito densos.
+            if (depth <= 1) return;
+
+            foreach (var prop in oneToOne)
+            {
+                var attr = TypeMetadataCache.GetOneToOneAttribute(prop);
+                var children = new List<object>();
+                foreach (var inst in instances)
+                {
+                    var value = prop.GetValue(inst);
+                    if (value != null) children.Add(value);
+                }
+                if (children.Count > 0)
+                    await LoadAsync(connection, dialect, attr.RelatedType, children, depth - 1, tx);
+            }
+
+            foreach (var prop in oneToMany)
+            {
+                var attr = TypeMetadataCache.GetOneToManyAttribute(prop);
+                var children = CollectChildArray(instances, prop);
+                if (children.Count > 0)
+                    await LoadAsync(connection, dialect, attr.RelatedType, children, depth - 1, tx);
+            }
+
+            foreach (var prop in manyToMany)
+            {
+                var attr = TypeMetadataCache.GetManyToManyAttribute(prop);
+                var children = CollectChildArray(instances, prop);
+                if (children.Count > 0)
+                    await LoadAsync(connection, dialect, attr.RelatedType, children, depth - 1, tx);
+            }
+        }
+
+        private static List<object> CollectChildArray(IList<object> roots, PropertyInfo navProp)
+        {
+            var collected = new List<object>();
+            foreach (var inst in roots)
+            {
+                var value = navProp.GetValue(inst);
+                if (value is System.Collections.IEnumerable enumerable)
+                    foreach (var item in enumerable)
+                        if (item != null) collected.Add(item);
+            }
+            return collected;
         }
 
         private static async Task LoadOneToOneAsync(DbConnection connection, IDialect dialect,
