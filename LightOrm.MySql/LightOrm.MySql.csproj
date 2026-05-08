@@ -7,4 +7,12 @@
     <LangVersion>8.0</LangVersion>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="MySql.Data" Version="8.0.33" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LightOrm.Core\LightOrm.Core.csproj" />
+  </ItemGroup>
+
 </Project>

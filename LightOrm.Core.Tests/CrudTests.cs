@@ -1,19 +1,22 @@
-using Xunit;
+using System.Linq;
 using System.Threading.Tasks;
-using LightOrm.Core.Models;
+using LightOrm.Core.Sql;
 using LightOrm.Core.Tests.Models;
-using MySql.Data.MySqlClient;
+using LightOrm.MySql;
+using Xunit;
 
 namespace LightOrm.Core.Tests
 {
     public class CrudTests : TestBase
     {
+        private SqlRepository<TestUserModel, int> Repo() =>
+            new SqlRepository<TestUserModel, int>(Connection, new MySqlDialect());
+
         [Fact]
         public async Task CanCreateTableAndInsertData()
         {
-            // Arrange
-            var userModel = new TestUserModel();
-            await userModel.EnsureTableExistsAsync(Connection);
+            var repo = Repo();
+            await repo.EnsureSchemaAsync();
 
             var user = new TestUserModel
             {
@@ -21,87 +24,61 @@ namespace LightOrm.Core.Tests
                 EmailAddress = "test@example.com",
                 IsActive = true
             };
+            await repo.SaveAsync(user);
 
-            // Act
-            await user.SaveAsync(Connection);
-
-            // Assert
             Assert.True(user.Id > 0);
 
-            var loadedUser = await TestUserModel.FindByIdAsync(Connection, user.Id);
-            Assert.NotNull(loadedUser);
-            Assert.Equal("Test User", loadedUser.UserName);
-            Assert.Equal("test@example.com", loadedUser.EmailAddress);
-            Assert.True(loadedUser.IsActive);
+            var loaded = await repo.FindByIdAsync(user.Id);
+            Assert.NotNull(loaded);
+            Assert.Equal("Test User", loaded.UserName);
+            Assert.Equal("test@example.com", loaded.EmailAddress);
+            Assert.True(loaded.IsActive);
         }
 
         [Fact]
         public async Task CanUpdateData()
         {
-            // Arrange
-            var userModel = new TestUserModel();
-            await userModel.EnsureTableExistsAsync(Connection);
+            var repo = Repo();
+            await repo.EnsureSchemaAsync();
 
-            var user = new TestUserModel
-            {
-                UserName = "User to Update",
-                EmailAddress = "update@example.com",
-                IsActive = false
-            };
-            await user.SaveAsync(Connection);
+            var user = new TestUserModel { UserName = "User to Update", EmailAddress = "u@x.com", IsActive = false };
+            await repo.SaveAsync(user);
 
-            // Act
             user.UserName = "Updated User";
             user.IsActive = true;
-            await user.SaveAsync(Connection);
+            await repo.SaveAsync(user);
 
-            // Assert
-            var loadedUser = await TestUserModel.FindByIdAsync(Connection, user.Id);
-            Assert.NotNull(loadedUser);
-            Assert.Equal("Updated User", loadedUser.UserName);
-            Assert.True(loadedUser.IsActive);
+            var loaded = await repo.FindByIdAsync(user.Id);
+            Assert.Equal("Updated User", loaded.UserName);
+            Assert.True(loaded.IsActive);
         }
 
         [Fact]
         public async Task CanDeleteData()
         {
-            // Arrange
-            var userModel = new TestUserModel();
-            await userModel.EnsureTableExistsAsync(Connection);
+            var repo = Repo();
+            await repo.EnsureSchemaAsync();
 
-            var user = new TestUserModel
-            {
-                UserName = "User to Delete",
-                EmailAddress = "delete@example.com",
-                IsActive = true
-            };
-            await user.SaveAsync(Connection);
+            var user = new TestUserModel { UserName = "User to Delete", EmailAddress = "d@x.com", IsActive = true };
+            await repo.SaveAsync(user);
+            await repo.DeleteAsync(user);
 
-            // Act
-            await user.DeleteAsync(Connection);
-
-            // Assert
-            var loadedUser = await TestUserModel.FindByIdAsync(Connection, user.Id);
-            Assert.Null(loadedUser);
+            Assert.Null(await repo.FindByIdAsync(user.Id));
         }
 
         [Fact]
         public async Task CanFindAllData()
         {
-            // Arrange
-            var userModel = new TestUserModel();
-            await userModel.EnsureTableExistsAsync(Connection);
+            var repo = Repo();
+            await repo.EnsureSchemaAsync();
 
-            await new TestUserModel { UserName = "User1", EmailAddress = "user1@example.com" }.SaveAsync(Connection);
-            await new TestUserModel { UserName = "User2", EmailAddress = "user2@example.com" }.SaveAsync(Connection);
+            await repo.SaveAsync(new TestUserModel { UserName = "User1", EmailAddress = "u1@x.com" });
+            await repo.SaveAsync(new TestUserModel { UserName = "User2", EmailAddress = "u2@x.com" });
 
-            // Act
-            var allUsers = await TestUserModel.FindAllAsync(Connection);
-
-            // Assert
-            Assert.NotNull(allUsers);
-            Assert.Equal(2, allUsers.Count);
+            var all = await repo.FindAllAsync();
+            Assert.Equal(2, all.Count);
+            Assert.Contains(all, u => u.UserName == "User1");
+            Assert.Contains(all, u => u.UserName == "User2");
         }
     }
 }
-

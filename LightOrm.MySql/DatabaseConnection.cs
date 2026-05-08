@@ -1,7 +1,7 @@
-using MySql.Data.MySqlClient;
 using System;
+using MySql.Data.MySqlClient;
 
-namespace LightOrm.Core.Database
+namespace LightOrm.MySql
 {
     public class DatabaseConnection
     {
@@ -26,13 +26,8 @@ namespace LightOrm.Core.Database
         }
 
         private void InitializeConnectionString(
-            string server,
-            string database,
-            string userId,
-            string password,
-            string port,
-            bool pooling,
-            bool useSsl)
+            string server, string database, string userId, string password,
+            string port, bool pooling, bool useSsl)
         {
             try
             {
@@ -42,7 +37,7 @@ namespace LightOrm.Core.Database
                     Database = database,
                     UserID = userId,
                     Password = password,
-                    Port = UInt32.Parse(port),
+                    Port = uint.Parse(port),
                     Pooling = pooling,
                     SslMode = useSsl ? MySqlSslMode.Preferred : MySqlSslMode.None
                 };
@@ -66,7 +61,6 @@ namespace LightOrm.Core.Database
                 _errorLogger("Connection string is not initialized.");
                 throw new InvalidOperationException("Connection string is not initialized.");
             }
-
             return new MySqlConnection(_connectionString);
         }
     }
