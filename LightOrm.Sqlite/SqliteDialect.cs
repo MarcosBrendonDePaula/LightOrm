@@ -55,6 +55,9 @@ namespace LightOrm.Sqlite
             if (clrValue is bool b) return b ? 1L : 0L;
             if (clrValue is DateTime dt) return dt.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);
             if (clrValue is Guid g) return g.ToString("D");
+            // decimal vai como string mas em coluna TEXT (affinity NUMERIC reinterpreta
+            // strings com ponto e perde a vírgula decimal em algumas versões); preservamos
+            // exatamente o texto invariante.
             if (clrValue is decimal m) return m.ToString(CultureInfo.InvariantCulture);
             return clrValue;
         }
@@ -71,7 +74,13 @@ namespace LightOrm.Sqlite
             if (underlying == typeof(Guid))
                 return Guid.Parse(dbValue.ToString());
             if (underlying == typeof(decimal))
+            {
+                // SQLite com affinity NUMERIC pode devolver long/double dependendo
+                // do valor armazenado. Convertemos a partir do tipo nativo.
+                if (dbValue is long l) return (decimal)l;
+                if (dbValue is double d) return (decimal)d;
                 return decimal.Parse(dbValue.ToString(), CultureInfo.InvariantCulture);
+            }
 
             return Convert.ChangeType(dbValue, underlying, CultureInfo.InvariantCulture);
         }
