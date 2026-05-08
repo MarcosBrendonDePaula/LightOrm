@@ -71,6 +71,37 @@ namespace LightOrm.Core.Tests.Models
         public int ParentId { get; set; }
     }
 
+    [Table("table_attr_demo")]
+    public class TableAttributeModel : BaseModel<TableAttributeModel, int>
+    {
+        // Não sobrescreve TableName — vem do [Table].
+        [Column("name", length: 50)]
+        public string Name { get; set; }
+    }
+
+    public class IndexedModel : BaseModel<IndexedModel, int>
+    {
+        public override string TableName => "indexed_model";
+
+        [Column("email", length: 200)]
+        [Unique]
+        public string Email { get; set; }
+
+        // Índice composto: ambas as propriedades compartilham o mesmo Name.
+        [Column("first", length: 50)]
+        [Index("idx_full_name")]
+        public string First { get; set; }
+
+        [Column("last", length: 50)]
+        [Index("idx_full_name")]
+        public string Last { get; set; }
+
+        // Índice anônimo simples.
+        [Column("created_year")]
+        [Index]
+        public int CreatedYear { get; set; }
+    }
+
     public class VersionedModel : BaseModel<VersionedModel, int>
     {
         public override string TableName => "versioned";

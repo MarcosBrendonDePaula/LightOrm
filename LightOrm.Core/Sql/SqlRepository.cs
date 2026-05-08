@@ -124,16 +124,54 @@ namespace LightOrm.Core.Sql
             var ifNotExists = _dialect.SupportsIfNotExists ? "IF NOT EXISTS " : "";
             yield return $"CREATE TABLE {ifNotExists}{Q(_tableName)} (\n  {string.Join(",\n  ", allParts)}\n)";
 
+            var idxIfNotExists = _dialect.SupportsCreateIndexIfNotExists ? "IF NOT EXISTS " : "";
+
+            // 1) Índice automático em FK (mantém comportamento anterior).
             foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
             {
                 var fk = TypeMetadataCache.GetForeignKeyAttribute(prop);
                 var col = TypeMetadataCache.GetColumnAttribute(prop);
                 if (fk != null && col != null)
                 {
-                    var idxIfNotExists = _dialect.SupportsCreateIndexIfNotExists ? "IF NOT EXISTS " : "";
                     yield return $"CREATE INDEX {idxIfNotExists}{Q($"idx_{_tableName}_{col.Name}")} " +
                                  $"ON {Q(_tableName)}({Q(col.Name)})";
                 }
+            }
+
+            // 2) [Unique] na propriedade — UNIQUE INDEX dedicado.
+            foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
+            {
+                if (TypeMetadataCache.GetUniqueAttribute(prop) == null) continue;
+                var col = TypeMetadataCache.GetColumnAttribute(prop);
+                if (col == null) continue;
+                yield return $"CREATE UNIQUE INDEX {idxIfNotExists}{Q($"uq_{_tableName}_{col.Name}")} " +
+                             $"ON {Q(_tableName)}({Q(col.Name)})";
+            }
+
+            // 3) [Index] — agrupado por Name. Sem Name vira índice por coluna;
+            //    com Name compartilhado, índice composto na ordem de propriedades.
+            var indexGroups = new Dictionary<string, (bool unique, List<string> cols)>();
+            int anonCounter = 0;
+            foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
+            {
+                var idx = TypeMetadataCache.GetIndexAttribute(prop);
+                if (idx == null) continue;
+                var col = TypeMetadataCache.GetColumnAttribute(prop);
+                if (col == null) continue;
+
+                var name = idx.Name ?? $"idx_{_tableName}_{col.Name}_{anonCounter++}";
+                if (!indexGroups.TryGetValue(name, out var entry))
+                    indexGroups[name] = entry = (idx.Unique, new List<string>());
+                else if (entry.unique != idx.Unique)
+                    throw new InvalidOperationException(
+                        $"Índice '{name}' tem propriedades com Unique inconsistente em {typeof(T).Name}.");
+                entry.cols.Add(Q(col.Name));
+            }
+            foreach (var kv in indexGroups)
+            {
+                var keyword = kv.Value.unique ? "UNIQUE INDEX" : "INDEX";
+                yield return $"CREATE {keyword} {idxIfNotExists}{Q(kv.Key)} " +
+                             $"ON {Q(_tableName)}({string.Join(", ", kv.Value.cols)})";
             }
         }
 
