@@ -16,7 +16,7 @@ namespace LightOrm.Core.Sql
     /// o nome da propriedade é validado contra o modelo, então não há injeção
     /// possível pelo nome.
     /// </summary>
-    public class SqlQuery<T, TId> where T : BaseModel<T, TId>, new()
+    public class SqlQuery<T, TId> : IQuery<T, TId> where T : BaseModel<T, TId>, new()
     {
         private readonly DbConnection _connection;
         private readonly IDialect _dialect;
@@ -36,42 +36,42 @@ namespace LightOrm.Core.Sql
             _tableName = new T().TableName;
         }
 
-        public SqlQuery<T, TId> Where(string propertyName, string op, object value)
+        public IQuery<T, TId> Where(string propertyName, string op, object value)
         {
             ValidateOperator(op);
             _conditions.Add((ResolveColumnName(propertyName), op, value));
             return this;
         }
 
-        public SqlQuery<T, TId> Where(string propertyName, object value) =>
+        public IQuery<T, TId> Where(string propertyName, object value) =>
             Where(propertyName, "=", value);
 
-        public SqlQuery<T, TId> WhereIn(string propertyName, IEnumerable<object> values)
+        public IQuery<T, TId> WhereIn(string propertyName, IEnumerable<object> values)
         {
             _conditions.Add((ResolveColumnName(propertyName), "IN", values?.ToList() ?? new List<object>()));
             return this;
         }
 
-        public SqlQuery<T, TId> OrderBy(string propertyName)
+        public IQuery<T, TId> OrderBy(string propertyName)
         {
             _orderBy.Add((ResolveColumnName(propertyName), false));
             return this;
         }
 
-        public SqlQuery<T, TId> OrderByDescending(string propertyName)
+        public IQuery<T, TId> OrderByDescending(string propertyName)
         {
             _orderBy.Add((ResolveColumnName(propertyName), true));
             return this;
         }
 
-        public SqlQuery<T, TId> Take(int limit)
+        public IQuery<T, TId> Take(int limit)
         {
             if (limit < 0) throw new ArgumentOutOfRangeException(nameof(limit));
             _limit = limit;
             return this;
         }
 
-        public SqlQuery<T, TId> Skip(int offset)
+        public IQuery<T, TId> Skip(int offset)
         {
             if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset));
             _offset = offset;

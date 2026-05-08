@@ -34,7 +34,7 @@ namespace LightOrm.Core.Sql
 
         private bool HasAmbientTx => _ambientTx != null;
 
-        public SqlQuery<T, TId> Query() => new SqlQuery<T, TId>(_connection, _dialect, _ambientTx);
+        public IQuery<T, TId> Query() => new SqlQuery<T, TId>(_connection, _dialect, _ambientTx);
 
         // Devolve (tx, owned). Quando há tx ambiente, owned=false e o caller
         // não deve commit/rollback. Quando não há, abre uma nova owned=true.

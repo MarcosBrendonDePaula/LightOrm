@@ -49,6 +49,33 @@ namespace LightOrm.Core.Tests
         }
 
         [Fact]
+        public async Task Same_query_works_against_sqlite_and_mongo_via_IQuery()
+        {
+            IRepository<PortableUserModel, string> sqlite = RepositoryFactory.Sql<PortableUserModel, string>(
+                _sqliteConn, new SqliteDialect());
+            IRepository<PortableUserModel, string> mongo = new MongoRepository<PortableUserModel, string>(_mongoDb);
+            await sqlite.EnsureSchemaAsync();
+            await mongo.EnsureSchemaAsync();
+
+            foreach (var repo in new[] { sqlite, mongo })
+            {
+                for (int i = 1; i <= 5; i++)
+                    await repo.SaveAsync(new PortableUserModel { Name = $"u-{i}", Active = i % 2 == 0 });
+
+                // O mesmo código de Query roda contra os dois backends.
+                var actives = await repo.Query()
+                    .Where(nameof(PortableUserModel.Active), true)
+                    .OrderBy(nameof(PortableUserModel.Name))
+                    .ToListAsync();
+                Assert.Equal(2, actives.Count);
+                Assert.All(actives, u => Assert.True(u.Active));
+
+                var count = await repo.Query().CountAsync();
+                Assert.Equal(5, count);
+            }
+        }
+
+        [Fact]
         public async Task Same_model_works_against_sqlite_and_mongo_via_IRepository()
         {
             // O código de negócio usa apenas IRepository — composition root escolhe.

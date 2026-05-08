@@ -29,6 +29,8 @@ namespace LightOrm.Mongo
 
         public Task EnsureSchemaAsync() => Task.CompletedTask; // Mongo é schemaless.
 
+        public IQuery<T, TId> Query() => new MongoQuery<T, TId>(_collection, FromBson);
+
         public async Task<T> UpsertAsync(T entity)
         {
             if (entity == null) throw new ArgumentNullException(nameof(entity));
