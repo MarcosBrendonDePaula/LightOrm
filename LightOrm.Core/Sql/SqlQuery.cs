@@ -111,6 +111,11 @@ namespace LightOrm.Core.Sql
                 Populate(reader, instance);
                 results.Add(instance);
             }
+            foreach (var r in results)
+            {
+                r.OnAfterLoad();
+                await r.OnAfterLoadAsync();
+            }
             return results;
         }
 

@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using LightOrm.Core.Attributes;
 using LightOrm.Core.Models;
 using LightOrm.Core.Utilities;
+using LightOrm.Core.Validation;
 
 namespace LightOrm.Core.Sql
 {
@@ -182,16 +183,29 @@ namespace LightOrm.Core.Sql
             var idValue = idProp.GetValue(entity);
             var isNew = IsDefaultId(idValue);
 
+            // Hooks: BeforeSave roda primeiro; depois validação (para que o
+            // hook possa ajustar valores antes de validar — ex.: trim em strings).
+            entity.OnBeforeSave(isNew);
+            await entity.OnBeforeSaveAsync(isNew);
+            ModelValidator.Validate(entity);
+
+            T result;
             if (isNew)
             {
                 entity.CreatedAt = DateTime.UtcNow;
                 entity.UpdatedAt = entity.CreatedAt;
-                // Quando a chave é string/Guid não-autoincrement, geramos id no app.
                 AutoGenerateIdIfNeeded(entity, idProp);
-                return await InsertAsync(entity, idProp);
+                result = await InsertAsync(entity, idProp);
             }
-            entity.UpdatedAt = DateTime.UtcNow;
-            return await UpdateAsync(entity, idProp);
+            else
+            {
+                entity.UpdatedAt = DateTime.UtcNow;
+                result = await UpdateAsync(entity, idProp);
+            }
+
+            entity.OnAfterSave(isNew);
+            await entity.OnAfterSaveAsync(isNew);
+            return result;
         }
 
         private static void AutoGenerateIdIfNeeded(T entity, PropertyInfo idProp)
@@ -249,12 +263,20 @@ namespace LightOrm.Core.Sql
         public async Task DeleteAsync(T entity)
         {
             await EnsureOpenAsync();
+            entity.OnBeforeDelete();
+            await entity.OnBeforeDeleteAsync();
+
             var idProp = GetIdProperty();
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
             var sql = $"DELETE FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
-            using var cmd = NewCommand(sql, _ambientTx);
-            AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
-            await cmd.ExecuteNonQueryAsync();
+            using (var cmd = NewCommand(sql, _ambientTx))
+            {
+                AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            entity.OnAfterDelete();
+            await entity.OnAfterDeleteAsync();
         }
 
         private string SelectColumnList()
@@ -288,6 +310,11 @@ namespace LightOrm.Core.Sql
             if (instance != null && includeRelated)
                 await RelatedLoader.LoadAsync(_connection, _dialect, typeof(T), new object[] { instance }, _ambientTx);
 
+            if (instance != null)
+            {
+                instance.OnAfterLoad();
+                await instance.OnAfterLoadAsync();
+            }
             return instance;
         }
 
@@ -309,6 +336,12 @@ namespace LightOrm.Core.Sql
 
             if (includeRelated && results.Count > 0)
                 await RelatedLoader.LoadAsync(_connection, _dialect, typeof(T), results.Cast<object>().ToList(), _ambientTx);
+
+            foreach (var r in results)
+            {
+                r.OnAfterLoad();
+                await r.OnAfterLoadAsync();
+            }
 
             return results;
         }
