@@ -44,6 +44,27 @@ namespace LightOrm.Core.Tests.Models
         public string Zip { get; set; }
     }
 
+    [SoftDelete]
+    public class SoftDeletedMongoModel : BaseModel<SoftDeletedMongoModel, string>
+    {
+        public override string TableName => "soft_deleted_mongo";
+
+        [Column("name")]
+        public string Name { get; set; }
+    }
+
+    public class VersionedMongoModel : BaseModel<VersionedMongoModel, string>
+    {
+        public override string TableName => "versioned_mongo";
+
+        [Column("name")]
+        public string Name { get; set; }
+
+        [Column("row_version")]
+        [Version]
+        public int RowVersion { get; set; }
+    }
+
     public class TestUserWithEmbedsModel : BaseModel<TestUserWithEmbedsModel, string>
     {
         public override string TableName => "users_with_embeds";

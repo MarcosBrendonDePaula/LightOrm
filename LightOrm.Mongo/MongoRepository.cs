@@ -17,6 +17,10 @@ namespace LightOrm.Mongo
         private readonly IMongoCollection<BsonDocument> _collection;
         private readonly PropertyInfo _idProp;
         private readonly string _idColumnName;
+        private readonly string _softDeleteField;     // null se [SoftDelete] não está ativo
+        private readonly PropertyInfo _softDeleteProp;
+        private readonly PropertyInfo _versionProp;   // null se [Version] não está ativo
+        private readonly string _versionField;
 
         public MongoRepository(IMongoDatabase database)
         {
@@ -25,6 +29,30 @@ namespace LightOrm.Mongo
             _collection = database.GetCollection<BsonDocument>(tableName);
             _idProp = ResolveIdProperty();
             _idColumnName = TypeMetadataCache.GetColumnAttribute(_idProp).Name;
+
+            var sdAttr = TypeMetadataCache.GetSoftDeleteAttribute(typeof(T));
+            if (sdAttr != null)
+            {
+                _softDeleteField = sdAttr.ColumnName;
+                _softDeleteProp = typeof(T).GetProperty("DeletedAt")
+                    ?? throw new InvalidOperationException(
+                        $"[SoftDelete] em {typeof(T).Name}: propriedade DeletedAt ausente.");
+            }
+
+            foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
+            {
+                if (TypeMetadataCache.GetVersionAttribute(prop) != null)
+                {
+                    var t = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+                    if (t != typeof(int) && t != typeof(long))
+                        throw new InvalidOperationException(
+                            $"[Version] em {typeof(T).Name}.{prop.Name} requer int ou long.");
+                    _versionProp = prop;
+                    var col = TypeMetadataCache.GetColumnAttribute(prop);
+                    _versionField = col?.Name ?? prop.Name;
+                    break;
+                }
+            }
         }
 
         public Task EnsureSchemaAsync() => Task.CompletedTask; // Mongo é schemaless.
@@ -139,8 +167,36 @@ namespace LightOrm.Mongo
                 {
                     _idProp.SetValue(entity, Guid.NewGuid());
                 }
+                if (_versionProp != null)
+                {
+                    var current = _versionProp.GetValue(entity);
+                    if (current is int i && i == 0) _versionProp.SetValue(entity, 1);
+                    else if (current is long l && l == 0L) _versionProp.SetValue(entity, 1L);
+                }
                 var doc = ToBson(entity);
                 await _collection.InsertOneAsync(doc);
+            }
+            else if (_versionProp != null)
+            {
+                // Update com optimistic locking: filter por _id + versão atual.
+                entity.UpdatedAt = now;
+                var oldVersion = _versionProp.GetValue(entity);
+                if (oldVersion is int i) _versionProp.SetValue(entity, i + 1);
+                else if (oldVersion is long l) _versionProp.SetValue(entity, l + 1L);
+                var doc = ToBson(entity);
+                var filter = Builders<BsonDocument>.Filter.And(
+                    Builders<BsonDocument>.Filter.Eq("_id", doc["_id"]),
+                    Builders<BsonDocument>.Filter.Eq(_versionField, BsonValue.Create(oldVersion)));
+                var result = await _collection.ReplaceOneAsync(filter, doc);
+                if (result.MatchedCount == 0)
+                {
+                    // Reverte versão em memória pra permitir reload + retry.
+                    if (oldVersion is int i2) _versionProp.SetValue(entity, i2);
+                    else if (oldVersion is long l2) _versionProp.SetValue(entity, l2);
+                    throw new LightOrm.Core.Sql.DbConcurrencyException(
+                        $"Conflito de versão em {typeof(T).Name} (id={idValue}). " +
+                        $"Outra escrita modificou ou apagou o documento desde a leitura.");
+                }
             }
             else
             {
@@ -155,9 +211,15 @@ namespace LightOrm.Mongo
             return entity;
         }
 
-        public async Task<T> FindByIdAsync(TId id, bool includeRelated = false)
+        public Task<T> FindByIdAsync(TId id, bool includeRelated = false) =>
+            FindByIdInternalAsync(id, includeDeleted: false);
+
+        private async Task<T> FindByIdInternalAsync(TId id, bool includeDeleted)
         {
             var filter = Builders<BsonDocument>.Filter.Eq("_id", BsonValue.Create(id));
+            if (_softDeleteField != null && !includeDeleted)
+                filter = Builders<BsonDocument>.Filter.And(filter,
+                    Builders<BsonDocument>.Filter.Eq(_softDeleteField, BsonNull.Value));
             var doc = await _collection.Find(filter).FirstOrDefaultAsync();
             if (doc == null) return null;
             var instance = FromBson(doc);
@@ -166,9 +228,15 @@ namespace LightOrm.Mongo
             return instance;
         }
 
-        public async Task<List<T>> FindAllAsync(bool includeRelated = false)
+        public Task<List<T>> FindAllAsync(bool includeRelated = false) =>
+            FindAllInternalAsync(includeDeleted: false);
+
+        private async Task<List<T>> FindAllInternalAsync(bool includeDeleted)
         {
-            var docs = await _collection.Find(FilterDefinition<BsonDocument>.Empty).ToListAsync();
+            var filter = FilterDefinition<BsonDocument>.Empty;
+            if (_softDeleteField != null && !includeDeleted)
+                filter = Builders<BsonDocument>.Filter.Eq(_softDeleteField, BsonNull.Value);
+            var docs = await _collection.Find(filter).ToListAsync();
             var results = docs.Select(FromBson).ToList();
             foreach (var r in results)
             {
@@ -184,12 +252,52 @@ namespace LightOrm.Mongo
             await entity.OnBeforeDeleteAsync();
             var idValue = _idProp.GetValue(entity);
             var filter = Builders<BsonDocument>.Filter.Eq("_id", BsonValue.Create(idValue));
-            await _collection.DeleteOneAsync(filter);
+
+            if (_softDeleteField != null)
+            {
+                var now = DateTime.UtcNow;
+                _softDeleteProp.SetValue(entity, (DateTime?)now);
+                var update = Builders<BsonDocument>.Update.Set(_softDeleteField, BsonValue.Create(now));
+                await _collection.UpdateOneAsync(filter, update);
+            }
+            else
+            {
+                await _collection.DeleteOneAsync(filter);
+            }
+
             entity.OnAfterDelete();
             await entity.OnAfterDeleteAsync();
         }
 
-        private BsonDocument ToBson(T entity) => ToBsonAny(entity, typeof(T));
+        /// <summary>Restaura entidade soft-deletada (zera deleted_at).</summary>
+        public async Task RestoreAsync(T entity)
+        {
+            if (_softDeleteField == null)
+                throw new InvalidOperationException(
+                    $"RestoreAsync requer [SoftDelete] em {typeof(T).Name}.");
+            var idValue = _idProp.GetValue(entity);
+            var filter = Builders<BsonDocument>.Filter.Eq("_id", BsonValue.Create(idValue));
+            var update = Builders<BsonDocument>.Update.Set(_softDeleteField, BsonNull.Value);
+            await _collection.UpdateOneAsync(filter, update);
+            _softDeleteProp.SetValue(entity, null);
+        }
+
+        public Task<T> FindByIdIncludingDeletedAsync(TId id) =>
+            FindByIdInternalAsync(id, includeDeleted: true);
+
+        public Task<List<T>> FindAllIncludingDeletedAsync() => FindAllInternalAsync(includeDeleted: true);
+
+        private BsonDocument ToBson(T entity)
+        {
+            var doc = ToBsonAny(entity, typeof(T));
+            // Inclui DeletedAt se [SoftDelete] estiver ativo (não tem [Column]).
+            if (_softDeleteField != null)
+            {
+                var raw = _softDeleteProp.GetValue(entity);
+                doc[_softDeleteField] = raw == null ? BsonNull.Value : BsonValue.Create(raw);
+            }
+            return doc;
+        }
 
         private static BsonDocument ToBsonAny(object entity, Type entityType)
         {
@@ -240,7 +348,22 @@ namespace LightOrm.Mongo
             return col?.Name ?? prop.Name;
         }
 
-        private T FromBson(BsonDocument doc) => (T)FromBsonAny(doc, typeof(T));
+        private T FromBson(BsonDocument doc)
+        {
+            var instance = (T)FromBsonAny(doc, typeof(T));
+            // Hidrata DeletedAt quando [SoftDelete] está ativo.
+            if (_softDeleteField != null && doc.Contains(_softDeleteField))
+            {
+                var bson = doc[_softDeleteField];
+                if (!bson.IsBsonNull)
+                {
+                    var dt = MongoDB.Bson.BsonTypeMapper.MapToDotNetValue(bson);
+                    if (dt is DateTime parsed)
+                        _softDeleteProp.SetValue(instance, (DateTime?)parsed);
+                }
+            }
+            return instance;
+        }
 
         private static object FromBsonAny(BsonDocument doc, Type targetType)
         {
