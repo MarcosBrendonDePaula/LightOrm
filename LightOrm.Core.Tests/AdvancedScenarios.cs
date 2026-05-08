@@ -301,6 +301,52 @@ namespace LightOrm.Core.Tests
             Assert.Equal("c", loaded.Children[0].Label);
         }
 
+        // ---------- SaveManyAsync ----------
+
+        [Fact]
+        public async Task SaveMany_inserts_all_in_one_transaction()
+        {
+            var (conn, dialect) = Open();
+            var repo = new SqlRepository<TypesModel, int>(conn, dialect);
+            await repo.EnsureSchemaAsync();
+
+            var batch = Enumerable.Range(0, 25).Select(i => new TypesModel
+            {
+                Name = $"batch_{i}",
+                GuidValue = Guid.NewGuid(),
+                DecimalValue = i * 1.5m,
+                DateValue = DateTime.UtcNow
+            }).ToList();
+
+            var saved = await repo.SaveManyAsync(batch);
+            Assert.Equal(25, saved.Count);
+            Assert.All(saved, e => Assert.True(e.Id > 0));
+
+            var all = await repo.FindAllAsync();
+            Assert.Equal(25, all.Count);
+        }
+
+        [Fact]
+        public async Task SaveMany_mixes_inserts_and_updates()
+        {
+            var (conn, dialect) = Open();
+            var repo = new SqlRepository<TypesModel, int>(conn, dialect);
+            await repo.EnsureSchemaAsync();
+
+            var existing = new TypesModel { Name = "old", GuidValue = Guid.NewGuid(), DecimalValue = 1m, DateValue = DateTime.UtcNow };
+            await repo.SaveAsync(existing);
+            existing.Name = "updated";
+
+            var newOne = new TypesModel { Name = "new", GuidValue = Guid.NewGuid(), DecimalValue = 2m, DateValue = DateTime.UtcNow };
+
+            await repo.SaveManyAsync(new[] { existing, newOne });
+
+            var all = await repo.FindAllAsync();
+            Assert.Equal(2, all.Count);
+            Assert.Contains(all, e => e.Name == "updated");
+            Assert.Contains(all, e => e.Name == "new");
+        }
+
         // ---------- CreatedAt / UpdatedAt ----------
 
         [Fact]
@@ -363,6 +409,8 @@ namespace LightOrm.Core.Tests
         [Fact] public Task Delete_removes_record_and_findall_reflects() => Wrap().Delete_removes_record_and_findall_reflects();
         [Fact] public Task IncludeRelated_only_loads_one_level_deep() => Wrap().IncludeRelated_only_loads_one_level_deep();
         [Fact] public Task Timestamps_are_set_on_insert_and_updated_on_save() => Wrap().Timestamps_are_set_on_insert_and_updated_on_save();
+        [Fact] public Task SaveMany_inserts_all_in_one_transaction() => Wrap().SaveMany_inserts_all_in_one_transaction();
+        [Fact] public Task SaveMany_mixes_inserts_and_updates() => Wrap().SaveMany_mixes_inserts_and_updates();
 
         private class AdvancedScenariosWithConn : AdvancedScenarios
         {
@@ -400,6 +448,8 @@ namespace LightOrm.Core.Tests
         [Fact] public Task Delete_removes_record_and_findall_reflects() => Wrap().Delete_removes_record_and_findall_reflects();
         [Fact] public Task IncludeRelated_only_loads_one_level_deep() => Wrap().IncludeRelated_only_loads_one_level_deep();
         [Fact] public Task Timestamps_are_set_on_insert_and_updated_on_save() => Wrap().Timestamps_are_set_on_insert_and_updated_on_save();
+        [Fact] public Task SaveMany_inserts_all_in_one_transaction() => Wrap().SaveMany_inserts_all_in_one_transaction();
+        [Fact] public Task SaveMany_mixes_inserts_and_updates() => Wrap().SaveMany_mixes_inserts_and_updates();
 
         private class AdvancedScenariosWithConn : AdvancedScenarios
         {
