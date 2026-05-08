@@ -100,12 +100,14 @@ namespace LightOrm.Core.Sql
             {
                 var col = TypeMetadataCache.GetColumnAttribute(prop);
                 if (col == null) continue;
+                if (TypeMetadataCache.GetEmbeddedAttribute(prop) != null) continue; // ignora embeds em SQL
 
-                var sqlType = _dialect.MapType(prop.PropertyType, col);
+                var effective = EffectiveColumn(col, prop.PropertyType);
+                var sqlType = _dialect.MapType(prop.PropertyType, effective);
                 var def = $"{Q(col.Name)} {sqlType}";
 
-                if (col.IsPrimaryKey) def += " PRIMARY KEY";
-                if (col.AutoIncrement && !string.IsNullOrEmpty(_dialect.AutoIncrementClause))
+                if (effective.IsPrimaryKey) def += " PRIMARY KEY";
+                if (effective.AutoIncrement && !string.IsNullOrEmpty(_dialect.AutoIncrementClause))
                     def += " " + _dialect.AutoIncrementClause;
 
                 columns.Add(def);
@@ -146,10 +148,22 @@ namespace LightOrm.Core.Sql
             {
                 entity.CreatedAt = DateTime.UtcNow;
                 entity.UpdatedAt = entity.CreatedAt;
+                // Quando a chave é string/Guid não-autoincrement, geramos id no app.
+                AutoGenerateIdIfNeeded(entity, idProp);
                 return await InsertAsync(entity, idProp);
             }
             entity.UpdatedAt = DateTime.UtcNow;
             return await UpdateAsync(entity, idProp);
+        }
+
+        private static void AutoGenerateIdIfNeeded(T entity, PropertyInfo idProp)
+        {
+            if (IsAutoIncrement(idProp)) return;
+            var t = Nullable.GetUnderlyingType(idProp.PropertyType) ?? idProp.PropertyType;
+            if (t == typeof(string))
+                idProp.SetValue(entity, Guid.NewGuid().ToString("N"));
+            else if (t == typeof(Guid))
+                idProp.SetValue(entity, Guid.NewGuid());
         }
 
         private async Task<T> InsertAsync(T entity, PropertyInfo idProp)
@@ -277,6 +291,7 @@ namespace LightOrm.Core.Sql
                     {
                         entity.CreatedAt = DateTime.UtcNow;
                         entity.UpdatedAt = entity.CreatedAt;
+                        AutoGenerateIdIfNeeded(entity, idProp);
                         await InsertWithinTxAsync(entity, idProp, tx);
                     }
                     else
@@ -380,9 +395,14 @@ namespace LightOrm.Core.Sql
         {
             foreach (var prop in TypeMetadataCache.GetProperties(typeof(T)))
             {
+                if (TypeMetadataCache.GetEmbeddedAttribute(prop) != null) continue;
                 var col = TypeMetadataCache.GetColumnAttribute(prop);
                 if (col == null) continue;
-                if (skipAutoIncrement && col.AutoIncrement) continue;
+                // Usa AutoIncrement efetivo: chave string/Guid com autoIncrement
+                // herdado do BaseModel é tratada como não-auto, então o id gerado
+                // no app entra no INSERT.
+                var effective = EffectiveColumn(col, prop.PropertyType);
+                if (skipAutoIncrement && effective.AutoIncrement) continue;
                 yield return (col, prop);
             }
         }
@@ -400,7 +420,24 @@ namespace LightOrm.Core.Sql
         private static bool IsAutoIncrement(PropertyInfo idProp)
         {
             var col = TypeMetadataCache.GetColumnAttribute(idProp);
-            return col != null && col.AutoIncrement;
+            if (col == null || !col.AutoIncrement) return false;
+            // AutoIncrement só faz sentido em chaves inteiras. Para string/Guid
+            // o valor é gerado no app (ver AutoGenerateIdIfNeeded), e o atributo
+            // herdado do BaseModel é ignorado no SQL.
+            var t = Nullable.GetUnderlyingType(idProp.PropertyType) ?? idProp.PropertyType;
+            return t == typeof(int) || t == typeof(long) || t == typeof(short);
+        }
+
+        // Reescreve o ColumnAttribute desligando AutoIncrement para tipos não-inteiros.
+        // O atributo herdado de BaseModel<T,TId> tem autoIncrement=true por padrão,
+        // mas isso não pode ir pro DDL quando TId é string/Guid.
+        private static ColumnAttribute EffectiveColumn(ColumnAttribute col, Type clrType)
+        {
+            if (!col.AutoIncrement) return col;
+            var t = Nullable.GetUnderlyingType(clrType) ?? clrType;
+            if (t == typeof(int) || t == typeof(long) || t == typeof(short)) return col;
+            return new ColumnAttribute(col.Name, col.IsPrimaryKey, autoIncrement: false,
+                                       col.Length, col.IsUnsigned);
         }
 
         private static object ConvertToTarget(object value, Type targetType)
