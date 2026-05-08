@@ -12,6 +12,7 @@ namespace LightOrm.Sqlite
         public string ParameterPrefix => "@";
         public string AutoIncrementClause => "AUTOINCREMENT";
         public bool SupportsIfNotExists => true;
+        public bool SupportsCreateIndexIfNotExists => true;
 
         public string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"")}\"";
 

@@ -11,6 +11,7 @@ namespace LightOrm.MySql
         public string ParameterPrefix => "@";
         public string AutoIncrementClause => "AUTO_INCREMENT";
         public bool SupportsIfNotExists => true;
+        public bool SupportsCreateIndexIfNotExists => false;
 
         public string QuoteIdentifier(string name) => $"`{name.Replace("`", "``")}`";
 

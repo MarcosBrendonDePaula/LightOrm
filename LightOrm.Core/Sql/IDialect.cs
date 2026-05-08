@@ -9,6 +9,7 @@ namespace LightOrm.Core.Sql
         string ParameterPrefix { get; }
         string AutoIncrementClause { get; }
         bool SupportsIfNotExists { get; }
+        bool SupportsCreateIndexIfNotExists { get; }
 
         string QuoteIdentifier(string name);
         string GetLastInsertIdSql();
