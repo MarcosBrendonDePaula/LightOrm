@@ -31,6 +31,35 @@ namespace LightOrm.Core.Tests.Models
         public bool IsActive { get; set; }
     }
 
+    // Subdocumento embedded — não herda BaseModel, sem id próprio.
+    public class EmbeddedAddress
+    {
+        [Column("street")]
+        public string Street { get; set; }
+
+        [Column("city")]
+        public string City { get; set; }
+
+        [Column("zip")]
+        public string Zip { get; set; }
+    }
+
+    public class TestUserWithEmbedsModel : BaseModel<TestUserWithEmbedsModel, string>
+    {
+        public override string TableName => "users_with_embeds";
+
+        [Column("name")]
+        public string Name { get; set; }
+
+        // 1:N embed — array de subdocumentos.
+        [Embedded]
+        public EmbeddedAddress[] Addresses { get; set; }
+
+        // 1:1 embed — único subdocumento.
+        [Embedded]
+        public EmbeddedAddress PrimaryAddress { get; set; }
+    }
+
     public class MaliciousTableNameModel : BaseModel<MaliciousTableNameModel, int>
     {
         public override string TableName => "`malicious_table`; DROP TABLE users; --";
