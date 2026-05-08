@@ -147,6 +147,90 @@ namespace LightOrm.Core.Sql
             return await CountAsync() > 0;
         }
 
+        public async Task<int> UpdateAsync(IDictionary<string, object> set)
+        {
+            if (set == null || set.Count == 0)
+                throw new ArgumentException("UpdateAsync requer ao menos um par.", nameof(set));
+
+            await EnsureOpenAsync();
+
+            var setPairs = new List<(string col, object val, Type type)>();
+            foreach (var kv in set)
+            {
+                var colName = ResolveColumnName(kv.Key);
+                setPairs.Add((colName, kv.Value, kv.Value?.GetType() ?? typeof(object)));
+            }
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append("UPDATE ").Append(Q(_tableName)).Append(" SET ");
+            var setSql = new List<string>();
+            var parameters = new List<(string name, object value, Type type)>();
+            int idx = 0;
+            foreach (var (col, val, type) in setPairs)
+            {
+                var pname = $"set{idx++}";
+                setSql.Add($"{Q(col)} = {P(pname)}");
+                parameters.Add((pname, val, type));
+            }
+            sb.Append(string.Join(", ", setSql));
+
+            var (selectSql, whereParams) = BuildSelectSql("*");
+            int whereIdx = selectSql.IndexOf(" WHERE ", StringComparison.Ordinal);
+            if (whereIdx >= 0)
+            {
+                sb.Append(selectSql.Substring(whereIdx));
+                parameters.AddRange(whereParams);
+            }
+
+            using var cmd = _dialect.CreateCommand(_connection);
+            cmd.CommandText = sb.ToString();
+            if (_ambientTx != null) cmd.Transaction = _ambientTx;
+            ApplyParameters(cmd, parameters);
+            return await cmd.ExecuteNonQueryAsync();
+        }
+
+        public async Task<int> DeleteAsync()
+        {
+            await EnsureOpenAsync();
+
+            var (sdName, _) = SoftDeleteHelper.Resolve(typeof(T));
+            if (sdName != null && !IncludeDeleted)
+            {
+                // Soft delete em massa: SET deleted_at = now(). Não reusa
+                // UpdateAsync porque a coluna deleted_at não tem [Column]
+                // declarado nas propriedades do modelo (é virtual).
+                var (selectSqlSd, whereParamsSd) = BuildSelectSql("*");
+                var sbSd = new System.Text.StringBuilder();
+                sbSd.Append("UPDATE ").Append(Q(_tableName))
+                    .Append(" SET ").Append(Q(sdName)).Append(" = ").Append(P("__sdNow"));
+                int idxSd = selectSqlSd.IndexOf(" WHERE ", StringComparison.Ordinal);
+                if (idxSd >= 0) sbSd.Append(selectSqlSd.Substring(idxSd));
+
+                using var cmdSd = _dialect.CreateCommand(_connection);
+                cmdSd.CommandText = sbSd.ToString();
+                if (_ambientTx != null) cmdSd.Transaction = _ambientTx;
+                var pSd = cmdSd.CreateParameter();
+                pSd.ParameterName = P("__sdNow");
+                pSd.Value = _dialect.ToDbValue(DateTime.UtcNow, typeof(DateTime?)) ?? DBNull.Value;
+                cmdSd.Parameters.Add(pSd);
+                ApplyParameters(cmdSd, whereParamsSd);
+                return await cmdSd.ExecuteNonQueryAsync();
+            }
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append("DELETE FROM ").Append(Q(_tableName));
+
+            var (selectSql, whereParams) = BuildSelectSql("*");
+            int whereIdx = selectSql.IndexOf(" WHERE ", StringComparison.Ordinal);
+            if (whereIdx >= 0) sb.Append(selectSql.Substring(whereIdx));
+
+            using var cmd = _dialect.CreateCommand(_connection);
+            cmd.CommandText = sb.ToString();
+            if (_ambientTx != null) cmd.Transaction = _ambientTx;
+            ApplyParameters(cmd, whereParams);
+            return await cmd.ExecuteNonQueryAsync();
+        }
+
         // ------- internals -------
 
         private async Task EnsureOpenAsync()

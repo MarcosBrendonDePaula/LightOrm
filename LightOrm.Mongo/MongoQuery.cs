@@ -129,6 +129,30 @@ namespace LightOrm.Mongo
             return count > 0;
         }
 
+        public async Task<int> UpdateAsync(System.Collections.Generic.IDictionary<string, object> set)
+        {
+            if (set == null || set.Count == 0)
+                throw new ArgumentException("UpdateAsync requer ao menos um par.", nameof(set));
+
+            UpdateDefinition<BsonDocument> update = null;
+            foreach (var kv in set)
+            {
+                var field = ResolveFieldName(kv.Key);
+                var value = kv.Value == null ? BsonNull.Value : BsonValue.Create(kv.Value);
+                var step = Builders<BsonDocument>.Update.Set(field, value);
+                update = update == null ? step : Builders<BsonDocument>.Update.Combine(update, step);
+            }
+
+            var result = await _collection.UpdateManyAsync(BuildFilter(), update);
+            return (int)Math.Min(result.ModifiedCount, int.MaxValue);
+        }
+
+        public async Task<int> DeleteAsync()
+        {
+            var result = await _collection.DeleteManyAsync(BuildFilter());
+            return (int)Math.Min(result.DeletedCount, int.MaxValue);
+        }
+
         // ---------- internals ----------
 
         private FilterDefinition<BsonDocument> BuildFilter()

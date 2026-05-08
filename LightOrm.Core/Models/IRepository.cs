@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -18,5 +19,9 @@ namespace LightOrm.Core.Models
         Task<T> FindByIdAsync(TId id, bool includeRelated = false);
         Task<List<T>> FindAllAsync(bool includeRelated = false);
         Task DeleteAsync(T entity);
+
+        // Procura por filtro; se não encontrar, salva o default. Devolve a
+        // entidade resultante e um flag indicando se foi criado agora.
+        Task<(T entity, bool created)> FindOrCreateAsync(Action<IQuery<T, TId>> filter, T defaults);
     }
 }

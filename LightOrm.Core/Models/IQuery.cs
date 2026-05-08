@@ -32,5 +32,13 @@ namespace LightOrm.Core.Models
         Task<T> FirstOrDefaultAsync();
         Task<int> CountAsync();
         Task<bool> AnyAsync();
+
+        // Bulk update: aplica os pares (propriedade → valor) a todas as linhas
+        // que casam o filtro. Devolve o número de linhas afetadas.
+        Task<int> UpdateAsync(System.Collections.Generic.IDictionary<string, object> set);
+
+        // Bulk delete: remove (ou marca como deleted, em soft-delete) todas as
+        // linhas que casam o filtro. Devolve o número de linhas afetadas.
+        Task<int> DeleteAsync();
     }
 }

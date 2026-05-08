@@ -31,6 +31,18 @@ namespace LightOrm.Mongo
 
         public IQuery<T, TId> Query() => new MongoQuery<T, TId>(_collection, FromBson);
 
+        public async Task<(T entity, bool created)> FindOrCreateAsync(Action<IQuery<T, TId>> filter, T defaults)
+        {
+            if (filter == null) throw new ArgumentNullException(nameof(filter));
+            if (defaults == null) throw new ArgumentNullException(nameof(defaults));
+            var q = Query();
+            filter(q);
+            var existing = await q.FirstOrDefaultAsync();
+            if (existing != null) return (existing, false);
+            await SaveAsync(defaults);
+            return (defaults, true);
+        }
+
         public async Task<T> UpsertAsync(T entity)
         {
             if (entity == null) throw new ArgumentNullException(nameof(entity));
