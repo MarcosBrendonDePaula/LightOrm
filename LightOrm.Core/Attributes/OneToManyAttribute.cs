@@ -13,12 +13,18 @@ namespace LightOrm.Core.Attributes
         // Quando true, SaveAsync(pai) propaga o id pra FK dos filhos no array
         // e salva todos numa única transação. Default false (opt-in).
         public bool Cascade { get; }
+        // Quando true, DeleteAsync(pai) apaga (ou marca como deleted, em
+        // soft-delete) todos os filhos com FK apontando para o pai antes
+        // de deletar o pai. Default false (opt-in).
+        public bool CascadeDelete { get; }
 
-        public OneToManyAttribute(string foreignKeyProperty, Type relatedType, bool cascade = false)
+        public OneToManyAttribute(string foreignKeyProperty, Type relatedType,
+            bool cascade = false, bool cascadeDelete = false)
         {
             ForeignKeyProperty = foreignKeyProperty;
             RelatedType = relatedType;
             Cascade = cascade;
+            CascadeDelete = cascadeDelete;
         }
     }
 }

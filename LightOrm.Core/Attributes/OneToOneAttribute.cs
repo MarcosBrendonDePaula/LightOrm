@@ -10,16 +10,16 @@ namespace LightOrm.Core.Attributes
     {
         public string ForeignKeyProperty { get; }
         public Type RelatedType { get; }
-        // Quando true, SaveAsync(pai) também salva o filho referenciado pela
-        // navigation property e propaga o id apropriado para o FkProperty do
-        // pai. Default false (opt-in).
         public bool Cascade { get; }
+        public bool CascadeDelete { get; }
 
-        public OneToOneAttribute(string foreignKeyProperty, Type relatedType, bool cascade = false)
+        public OneToOneAttribute(string foreignKeyProperty, Type relatedType,
+            bool cascade = false, bool cascadeDelete = false)
         {
             ForeignKeyProperty = foreignKeyProperty;
             RelatedType = relatedType;
             Cascade = cascade;
+            CascadeDelete = cascadeDelete;
         }
     }
 }
