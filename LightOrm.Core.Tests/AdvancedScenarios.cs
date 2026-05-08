@@ -277,14 +277,15 @@ namespace LightOrm.Core.Tests
             Assert.Null(await repo.FindByIdAsync(a.Id));
         }
 
-        // ---------- Multi-nível (limitação documentada) ----------
+        // ---------- Multi-nível ----------
+        //
+        // includeRelated agora carrega múltiplos níveis automaticamente
+        // (ver EagerMultiLevelTests). Este teste cobre apenas o caso simples
+        // 1 nível com navigation property sem relacionamentos próprios.
 
         [Fact]
-        public async Task IncludeRelated_only_loads_one_level_deep()
+        public async Task IncludeRelated_loads_root_level_when_child_has_no_navigation()
         {
-            // Limitação: includeRelated carrega 1 nível. Se Parent.Children carregar,
-            // os Children não têm seus próprios relacionamentos resolvidos.
-            // Este teste documenta isso para que mudanças futuras sejam detectadas.
             var (conn, dialect) = Open();
             var parents = new SqlRepository<ParentModel, int>(conn, dialect);
             var children = new SqlRepository<ChildModel, int>(conn, dialect);
@@ -296,8 +297,6 @@ namespace LightOrm.Core.Tests
 
             var loaded = await parents.FindByIdAsync(p.Id, includeRelated: true);
             Assert.Single(loaded.Children);
-            // ChildModel não tem navigation back para Parent, então nada a checar
-            // do outro lado; basta confirmar que o nível raiz carregou.
             Assert.Equal("c", loaded.Children[0].Label);
         }
 
@@ -407,7 +406,7 @@ namespace LightOrm.Core.Tests
         [Fact] public Task Parent_with_no_children_returns_empty_array() => Wrap().Parent_with_no_children_returns_empty_array();
         [Fact] public Task FindAll_includeRelated_handles_volume() => Wrap().FindAll_includeRelated_handles_volume();
         [Fact] public Task Delete_removes_record_and_findall_reflects() => Wrap().Delete_removes_record_and_findall_reflects();
-        [Fact] public Task IncludeRelated_only_loads_one_level_deep() => Wrap().IncludeRelated_only_loads_one_level_deep();
+        [Fact] public Task IncludeRelated_loads_root_level_when_child_has_no_navigation() => Wrap().IncludeRelated_loads_root_level_when_child_has_no_navigation();
         [Fact] public Task Timestamps_are_set_on_insert_and_updated_on_save() => Wrap().Timestamps_are_set_on_insert_and_updated_on_save();
         [Fact] public Task SaveMany_inserts_all_in_one_transaction() => Wrap().SaveMany_inserts_all_in_one_transaction();
         [Fact] public Task SaveMany_mixes_inserts_and_updates() => Wrap().SaveMany_mixes_inserts_and_updates();
@@ -446,7 +445,7 @@ namespace LightOrm.Core.Tests
         [Fact] public Task Parent_with_no_children_returns_empty_array() => Wrap().Parent_with_no_children_returns_empty_array();
         [Fact] public Task FindAll_includeRelated_handles_volume() => Wrap().FindAll_includeRelated_handles_volume();
         [Fact] public Task Delete_removes_record_and_findall_reflects() => Wrap().Delete_removes_record_and_findall_reflects();
-        [Fact] public Task IncludeRelated_only_loads_one_level_deep() => Wrap().IncludeRelated_only_loads_one_level_deep();
+        [Fact] public Task IncludeRelated_loads_root_level_when_child_has_no_navigation() => Wrap().IncludeRelated_loads_root_level_when_child_has_no_navigation();
         [Fact] public Task Timestamps_are_set_on_insert_and_updated_on_save() => Wrap().Timestamps_are_set_on_insert_and_updated_on_save();
         [Fact] public Task SaveMany_inserts_all_in_one_transaction() => Wrap().SaveMany_inserts_all_in_one_transaction();
         [Fact] public Task SaveMany_mixes_inserts_and_updates() => Wrap().SaveMany_mixes_inserts_and_updates();
