@@ -1,4 +1,4 @@
-﻿Microsoft Visual Studio Solution File, Format Version 12.00
+Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
@@ -6,7 +6,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Core", "LightOrm.C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Unity", "LightOrm.Unity\LightOrm.Unity.csproj", "{9B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D1}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Tests", "LightOrm.Tests\LightOrm.Tests.csproj", "{AB716883-7F5D-4F2F-8F7E-6AE3EFA8E8D2}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.MySql", "LightOrm.MySql\LightOrm.MySql.csproj", "{1A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Sqlite", "LightOrm.Sqlite\LightOrm.Sqlite.csproj", "{2A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Mongo", "LightOrm.Mongo\LightOrm.Mongo.csproj", "{3A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LightOrm.Core.Tests", "LightOrm.Core.Tests\LightOrm.Core.Tests.csproj", "{4A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D6}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -25,9 +31,21 @@ Global
 		{9B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9B716883-7F5D-4F2F-8F7E-6AE3EFA8E8D1}.Release|Any CPU.Build.0 = Release|Any CPU
-		{AB716883-7F5D-4F2F-8F7E-6AE3EFA8E8D2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{AB716883-7F5D-4F2F-8F7E-6AE3EFA8E8D2}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{AB716883-7F5D-4F2F-8F7E-6AE3EFA8E8D2}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{AB716883-7F5D-4F2F-8F7E-6AE3EFA8E8D2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4A716883-7F5D-4F2F-8F7E-6AE3EFA8E8D6}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
