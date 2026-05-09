@@ -118,6 +118,27 @@ namespace LightOrm.Core.Tests.Models
         public int Age { get; set; }
     }
 
+    public class ScopedModel : BaseModel<ScopedModel, int>
+    {
+        public override string TableName => "scoped";
+
+        [Column("name", length: 50)] public string Name { get; set; }
+        [Column("active")]            public bool Active { get; set; }
+        [Column("priority")]          public int Priority { get; set; }
+
+        [Scope("active")]
+        public static IQuery<ScopedModel, int> ScopeActive(IQuery<ScopedModel, int> q) =>
+            q.Where("Active", true);
+
+        [Scope("highPriority")]
+        public static IQuery<ScopedModel, int> ScopeHighPriority(IQuery<ScopedModel, int> q) =>
+            q.Where("Priority", ">=", 5);
+
+        [Scope("byName")]
+        public static IQuery<ScopedModel, int> ScopeByName(IQuery<ScopedModel, int> q) =>
+            q.OrderBy("Name");
+    }
+
     public class GrandparentModel : BaseModel<GrandparentModel, int>
     {
         public override string TableName => "grandparent";
