@@ -249,34 +249,66 @@ namespace LightOrm.Core.Sql
             var idProp = GetIdProperty();
             var isNew = IsDefaultId(idProp.GetValue(entity));
 
-            if (!await FireBeforeSaveHooksAsync(entity, isNew)) return entity;
-
-            T result;
-            if (isNew)
+            // Abre tx no nível do Save para que os hooks com HookContext
+            // (audit log, etc.) participem da MESMA transação da operação.
+            var (tx, owned) = BeginOrUseTx();
+            var ctx = NewHookContext(tx);
+            try
             {
-                entity.CreatedAt = DateTime.UtcNow;
-                entity.UpdatedAt = entity.CreatedAt;
-                AutoGenerateIdIfNeeded(entity, idProp);
-                result = await InsertAsync(entity, idProp);
-            }
-            else
-            {
-                entity.UpdatedAt = DateTime.UtcNow;
-                result = await UpdateAsync(entity, idProp);
-            }
+                if (!await FireBeforeSaveHooksAsync(entity, isNew, ctx))
+                {
+                    if (owned) tx.Commit();
+                    return entity;
+                }
 
-            await FireAfterSaveHooksAsync(entity, isNew);
-            return result;
+                if (isNew)
+                {
+                    entity.CreatedAt = DateTime.UtcNow;
+                    entity.UpdatedAt = entity.CreatedAt;
+                    AutoGenerateIdIfNeeded(entity, idProp);
+                    await InsertWithinTxAsync(entity, idProp, tx);
+                }
+                else
+                {
+                    entity.UpdatedAt = DateTime.UtcNow;
+                    await UpdateWithinTxAsync(entity, idProp, tx);
+                }
+                await CascadeSaver.SaveCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
+
+                await FireAfterSaveHooksAsync(entity, isNew, ctx);
+
+                if (owned) tx.Commit();
+                return entity;
+            }
+            catch
+            {
+                if (owned) tx.Rollback();
+                throw;
+            }
+            finally
+            {
+                if (owned) tx.Dispose();
+            }
         }
+
+        private HookContext NewHookContext(DbTransaction tx) => new HookContext(_connection, _dialect, tx);
 
         // Disparadores centralizados para reuso em SaveAsync, UpsertAsync, SaveManyAsync.
         // Devolve true se a operação deve prosseguir; false para cancelar.
-        private static async Task<bool> FireBeforeSaveHooksAsync(T entity, bool isInsert)
+        private async Task<bool> FireBeforeSaveHooksAsync(T entity, bool isInsert, HookContext ctx)
         {
             entity.OnBeforeSave(isInsert);
             await entity.OnBeforeSaveAsync(isInsert);
-            if (isInsert) { entity.OnBeforeCreate(); await entity.OnBeforeCreateAsync(); }
-            else          { entity.OnBeforeUpdate(); await entity.OnBeforeUpdateAsync(); }
+            if (isInsert)
+            {
+                entity.OnBeforeCreate();
+                await entity.OnBeforeCreateAsync(ctx);
+            }
+            else
+            {
+                entity.OnBeforeUpdate();
+                await entity.OnBeforeUpdateAsync(ctx);
+            }
 
             if (!await entity.CanSaveAsync(isInsert)) return false;
 
@@ -288,10 +320,18 @@ namespace LightOrm.Core.Sql
             return true;
         }
 
-        private static async Task FireAfterSaveHooksAsync(T entity, bool isInsert)
+        private static async Task FireAfterSaveHooksAsync(T entity, bool isInsert, HookContext ctx)
         {
-            if (isInsert) { entity.OnAfterCreate(); await entity.OnAfterCreateAsync(); }
-            else          { entity.OnAfterUpdate(); await entity.OnAfterUpdateAsync(); }
+            if (isInsert)
+            {
+                entity.OnAfterCreate();
+                await entity.OnAfterCreateAsync(ctx);
+            }
+            else
+            {
+                entity.OnAfterUpdate();
+                await entity.OnAfterUpdateAsync(ctx);
+            }
             entity.OnAfterSave(isInsert);
             await entity.OnAfterSaveAsync(isInsert);
         }
@@ -351,18 +391,24 @@ namespace LightOrm.Core.Sql
         public async Task DeleteAsync(T entity)
         {
             await EnsureOpenAsync();
-            entity.OnBeforeDelete();
-            await entity.OnBeforeDeleteAsync();
-            if (!await entity.CanDeleteAsync()) return;
-
             var idProp = GetIdProperty();
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
             var (sdName, sdProp) = SoftDeleteHelper.Resolve(typeof(T));
 
             // Cascade delete + delete principal numa tx (compartilhada com a ambiente quando há).
+            // Hooks com ctx participam da mesma transação.
             var (tx, owned) = BeginOrUseTx();
+            var ctx = NewHookContext(tx);
             try
             {
+                entity.OnBeforeDelete();
+                await entity.OnBeforeDeleteAsync(ctx);
+                if (!await entity.CanDeleteAsync())
+                {
+                    if (owned) tx.Commit();
+                    return;
+                }
+
                 await CascadeDeleter.DeleteCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
 
                 string sql;
@@ -384,6 +430,9 @@ namespace LightOrm.Core.Sql
                     await cmd.ExecuteNonQueryAsync();
                 }
 
+                entity.OnAfterDelete();
+                await entity.OnAfterDeleteAsync(ctx);
+
                 if (owned) tx.Commit();
             }
             catch
@@ -395,9 +444,6 @@ namespace LightOrm.Core.Sql
             {
                 if (owned) tx.Dispose();
             }
-
-            entity.OnAfterDelete();
-            await entity.OnAfterDeleteAsync();
         }
 
         /// <summary>Restaura entidade soft-deletada (zera deleted_at).</summary>
@@ -543,7 +589,8 @@ namespace LightOrm.Core.Sql
                 }
 
                 isInsert = !exists;
-                if (!await FireBeforeSaveHooksAsync(entity, isInsert))
+                var ctx = NewHookContext(tx);
+                if (!await FireBeforeSaveHooksAsync(entity, isInsert, ctx))
                 {
                     if (owned) tx.Commit();
                     return entity;
@@ -562,8 +609,8 @@ namespace LightOrm.Core.Sql
                 }
                 await CascadeSaver.SaveCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
 
+                await FireAfterSaveHooksAsync(entity, isInsert, ctx);
                 if (owned) tx.Commit();
-                await FireAfterSaveHooksAsync(entity, isInsert);
                 return entity;
             }
             catch
@@ -586,6 +633,7 @@ namespace LightOrm.Core.Sql
             await EnsureOpenAsync();
             var idProp = GetIdProperty();
             var (tx, owned) = BeginOrUseTx();
+            var ctx = NewHookContext(tx);
             var states = new List<(T entity, bool isNew, bool cancelled)>(list.Count);
             try
             {
@@ -593,7 +641,7 @@ namespace LightOrm.Core.Sql
                 {
                     var idValue = idProp.GetValue(entity);
                     var isNew = IsDefaultId(idValue);
-                    if (!await FireBeforeSaveHooksAsync(entity, isNew))
+                    if (!await FireBeforeSaveHooksAsync(entity, isNew, ctx))
                     {
                         states.Add((entity, isNew, cancelled: true));
                         continue;
@@ -614,12 +662,12 @@ namespace LightOrm.Core.Sql
                     }
                     await CascadeSaver.SaveCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
                 }
-                if (owned) tx.Commit();
                 foreach (var (entity, isNew, cancelled) in states)
                 {
                     if (cancelled) continue;
-                    await FireAfterSaveHooksAsync(entity, isNew);
+                    await FireAfterSaveHooksAsync(entity, isNew, ctx);
                 }
+                if (owned) tx.Commit();
                 return list;
             }
             catch
