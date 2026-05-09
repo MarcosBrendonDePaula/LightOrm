@@ -66,13 +66,17 @@ namespace LightOrm.Core.Models
 
         protected internal virtual void OnBeforeCreate() { }
         protected internal virtual Task OnBeforeCreateAsync() => Task.CompletedTask;
+        protected internal virtual Task OnBeforeCreateAsync(HookContext ctx) => OnBeforeCreateAsync();
         protected internal virtual void OnAfterCreate() { }
         protected internal virtual Task OnAfterCreateAsync() => Task.CompletedTask;
+        protected internal virtual Task OnAfterCreateAsync(HookContext ctx) => OnAfterCreateAsync();
 
         protected internal virtual void OnBeforeUpdate() { }
         protected internal virtual Task OnBeforeUpdateAsync() => Task.CompletedTask;
+        protected internal virtual Task OnBeforeUpdateAsync(HookContext ctx) => OnBeforeUpdateAsync();
         protected internal virtual void OnAfterUpdate() { }
         protected internal virtual Task OnAfterUpdateAsync() => Task.CompletedTask;
+        protected internal virtual Task OnAfterUpdateAsync(HookContext ctx) => OnAfterUpdateAsync();
 
         protected internal virtual void OnBeforeValidate() { }
         protected internal virtual Task OnBeforeValidateAsync() => Task.CompletedTask;
@@ -81,8 +85,10 @@ namespace LightOrm.Core.Models
 
         protected internal virtual void OnBeforeDelete() { }
         protected internal virtual Task OnBeforeDeleteAsync() => Task.CompletedTask;
+        protected internal virtual Task OnBeforeDeleteAsync(HookContext ctx) => OnBeforeDeleteAsync();
         protected internal virtual void OnAfterDelete() { }
         protected internal virtual Task OnAfterDeleteAsync() => Task.CompletedTask;
+        protected internal virtual Task OnAfterDeleteAsync(HookContext ctx) => OnAfterDeleteAsync();
 
         protected internal virtual void OnBeforeRestore() { }
         protected internal virtual Task OnBeforeRestoreAsync() => Task.CompletedTask;

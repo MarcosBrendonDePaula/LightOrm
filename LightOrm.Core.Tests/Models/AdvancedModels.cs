@@ -99,6 +99,49 @@ namespace LightOrm.Core.Tests.Models
         protected internal override void OnAfterLoad() => Events.Add("after-load");
     }
 
+    public class AuditedOrderModel : BaseModel<AuditedOrderModel, int>
+    {
+        public override string TableName => "audited_orders";
+
+        [Column("description", length: 100)] public string Description { get; set; }
+        [Column("total")]                     public decimal Total { get; set; }
+
+        protected internal override async Task OnAfterUpdateAsync(HookContext ctx)
+        {
+            // Cada update grava uma linha de audit log na MESMA transação.
+            var auditRepo = ctx.GetRepository<AuditEntryModel, int>();
+            await auditRepo.SaveAsync(new AuditEntryModel
+            {
+                EntityType = nameof(AuditedOrderModel),
+                EntityId = Id,
+                Hash = $"{Id}|{Description}|{Total}|{UpdatedAt:O}".GetHashCode(),
+                ChangedAt = DateTime.UtcNow
+            });
+        }
+
+        protected internal override async Task OnAfterCreateAsync(HookContext ctx)
+        {
+            var auditRepo = ctx.GetRepository<AuditEntryModel, int>();
+            await auditRepo.SaveAsync(new AuditEntryModel
+            {
+                EntityType = nameof(AuditedOrderModel),
+                EntityId = Id,
+                Hash = $"{Id}|{Description}|{Total}|created".GetHashCode(),
+                ChangedAt = DateTime.UtcNow
+            });
+        }
+    }
+
+    public class AuditEntryModel : BaseModel<AuditEntryModel, int>
+    {
+        public override string TableName => "audit_entries";
+
+        [Column("entity_type", length: 100)] public string EntityType { get; set; }
+        [Column("entity_id")]                 public int EntityId { get; set; }
+        [Column("hash")]                      public int Hash { get; set; }
+        [Column("changed_at")]                public DateTime ChangedAt { get; set; }
+    }
+
     [SoftDelete]
     public class GranularHookModel : BaseModel<GranularHookModel, int>
     {
