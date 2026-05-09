@@ -215,5 +215,36 @@ namespace LightOrm.Core.Tests
                 .ToListAsync();
             Assert.All(result, e => Assert.True(e.DecimalValue > 3m && e.DecimalValue < 9m));
         }
+
+        [Fact]
+        public async Task FirstOrDefault_does_not_poison_reused_query_limit()
+        {
+            var repo = await Seed();
+            var query = repo.Query()
+                .Where(nameof(TypesModel.DecimalValue), ">", 0m)
+                .OrderBy(nameof(TypesModel.Name));
+
+            var first = await query.FirstOrDefaultAsync();
+            var all = await query.ToListAsync();
+
+            Assert.NotNull(first);
+            Assert.Equal(10, all.Count);
+            Assert.Equal("item-01", all[0].Name);
+            Assert.Equal("item-10", all[9].Name);
+        }
+
+        [Fact]
+        public async Task Any_does_not_poison_reused_query_limit()
+        {
+            var repo = await Seed();
+            var query = repo.Query()
+                .Where(nameof(TypesModel.DecimalValue), ">", 0m)
+                .OrderBy(nameof(TypesModel.Name));
+
+            Assert.True(await query.AnyAsync());
+
+            var all = await query.ToListAsync();
+            Assert.Equal(10, all.Count);
+        }
     }
 }

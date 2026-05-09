@@ -359,7 +359,15 @@ namespace LightOrm.Core.Sql
 
         private static string ResolveTableName(Type modelType)
         {
-            var instance = Activator.CreateInstance(modelType) as IModel;
+            object created;
+            try { created = Activator.CreateInstance(modelType); }
+            catch (MissingMethodException)
+            {
+                throw new InvalidOperationException(
+                    $"Tipo {modelType.Name} precisa de um construtor sem parâmetros para ser usado em relacionamentos.");
+            }
+
+            var instance = created as IModel;
             if (instance == null)
                 throw new InvalidOperationException($"Tipo {modelType.Name} não implementa IModel.");
             return instance.GetTableName();

@@ -500,6 +500,7 @@ namespace LightOrm.Core.Sql
                 return await SaveAsync(entity);
 
             var (tx, owned) = BeginOrUseTx();
+            bool isInsert = false;
             try
             {
                 var checkSql = $"SELECT 1 FROM {Q(_tableName)} WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
@@ -510,6 +511,11 @@ namespace LightOrm.Core.Sql
                     var raw = await cmd.ExecuteScalarAsync();
                     exists = raw != null && raw != DBNull.Value;
                 }
+
+                isInsert = !exists;
+                entity.OnBeforeSave(isInsert);
+                await entity.OnBeforeSaveAsync(isInsert);
+                ModelValidator.Validate(entity);
 
                 if (exists)
                 {
@@ -522,8 +528,11 @@ namespace LightOrm.Core.Sql
                     entity.UpdatedAt = entity.CreatedAt;
                     await InsertWithinTxAsync(entity, idProp, tx);
                 }
+                await CascadeSaver.SaveCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
 
                 if (owned) tx.Commit();
+                entity.OnAfterSave(isInsert);
+                await entity.OnAfterSaveAsync(isInsert);
                 return entity;
             }
             catch
@@ -546,12 +555,19 @@ namespace LightOrm.Core.Sql
             await EnsureOpenAsync();
             var idProp = GetIdProperty();
             var (tx, owned) = BeginOrUseTx();
+            var states = new List<(T entity, bool isNew)>(list.Count);
             try
             {
                 foreach (var entity in list)
                 {
                     var idValue = idProp.GetValue(entity);
-                    if (IsDefaultId(idValue))
+                    var isNew = IsDefaultId(idValue);
+                    entity.OnBeforeSave(isNew);
+                    await entity.OnBeforeSaveAsync(isNew);
+                    ModelValidator.Validate(entity);
+                    states.Add((entity, isNew));
+
+                    if (isNew)
                     {
                         entity.CreatedAt = DateTime.UtcNow;
                         entity.UpdatedAt = entity.CreatedAt;
@@ -563,8 +579,14 @@ namespace LightOrm.Core.Sql
                         entity.UpdatedAt = DateTime.UtcNow;
                         await UpdateWithinTxAsync(entity, idProp, tx);
                     }
+                    await CascadeSaver.SaveCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
                 }
                 if (owned) tx.Commit();
+                foreach (var (entity, isNew) in states)
+                {
+                    entity.OnAfterSave(isNew);
+                    await entity.OnAfterSaveAsync(isNew);
+                }
                 return list;
             }
             catch

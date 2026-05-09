@@ -121,9 +121,17 @@ namespace LightOrm.Core.Sql
 
         public async Task<T> FirstOrDefaultAsync()
         {
-            _limit = 1;
-            var list = await ToListAsync();
-            return list.Count == 0 ? null : list[0];
+            var previousLimit = _limit;
+            try
+            {
+                _limit = 1;
+                var list = await ToListAsync();
+                return list.Count == 0 ? null : list[0];
+            }
+            finally
+            {
+                _limit = previousLimit;
+            }
         }
 
         public async Task<int> CountAsync()
@@ -143,8 +151,16 @@ namespace LightOrm.Core.Sql
 
         public async Task<bool> AnyAsync()
         {
-            _limit = 1;
-            return await CountAsync() > 0;
+            var previousLimit = _limit;
+            try
+            {
+                _limit = 1;
+                return await CountAsync() > 0;
+            }
+            finally
+            {
+                _limit = previousLimit;
+            }
         }
 
         public async Task<int> UpdateAsync(IDictionary<string, object> set)
@@ -253,10 +269,13 @@ namespace LightOrm.Core.Sql
             {
                 return Convert.ToDecimal(raw, System.Globalization.CultureInfo.InvariantCulture);
             }
-            catch (InvalidCastException)
+            catch (Exception ex) when (ex is InvalidCastException || ex is FormatException)
             {
-                // DateTime: converte para ticks (decimal).
+                // DateTime pode vir como DateTime nativo ou string formatada pelo dialect.
                 if (raw is DateTime dt) return dt.Ticks;
+                if (DateTime.TryParse(raw.ToString(), System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var parsed))
+                    return parsed.Ticks;
                 throw;
             }
         }
