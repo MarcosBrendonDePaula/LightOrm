@@ -396,3 +396,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Pacote drop-in pra Unity é gerado por scripts/build-unity-dist.sh
+dist/
