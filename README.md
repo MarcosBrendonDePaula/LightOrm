@@ -625,22 +625,59 @@ Migrations descobertas via reflexão no assembly que você passa, ordenadas por 
 
 ## Unity
 
+`LightOrm.Unity.Database.DatabaseManager` é um MonoBehaviour singleton que cobre os três providers SQL com configuração via Inspector. SQLite é o default (caso comum: save local).
+
 ```csharp
 public class GameManager : MonoBehaviour
 {
     private async void Start()
     {
-        using var conn = DatabaseManager.Instance.GetConnection();
-        var repo = new SqlRepository<UserModel, int>(conn, new MySqlDialect());
+        var db = DatabaseManager.Instance;
+        await db.InitializeAsync();              // abre connection com base no provider escolhido
 
-        var user = new UserModel { Name = "Player", Email = "p@game.com", IsActive = true };
-        await repo.SaveAsync(user);
-        Debug.Log($"Created user {user.Id}");
+        var players = await db.GetRepositoryAsync<PlayerSave, int>();
+        await players.EnsureSchemaAsync();
+
+        var arthur = new PlayerSave { Name = "Arthur", Level = 1 };
+        await players.SaveAsync(arthur);
+        Debug.Log($"Player {arthur.Name} salvo com id {arthur.Id}");
     }
 }
 ```
 
-Configure servidor/usuário/senha no Inspector do `DatabaseManager`. Helper específico para SQLite local (save de jogo) está na issue #49.
+### Configuração no Inspector
+
+| Campo | Padrão | Descrição |
+|---|---|---|
+| `Provider` | `Sqlite` | Dropdown: Sqlite / MySql / Postgres |
+| **SQLite** | | |
+| `Sqlite File Name` | `lightorm.db` | Arquivo dentro de `Application.persistentDataPath` |
+| `Sqlite In Memory` | `false` | `true` = banco em memória (perdido ao fechar) |
+| **MySQL / Postgres** | | |
+| `Server`, `Database`, `User Id`, `Password`, `Port` | — | Connection string |
+| `Pooling` | `true` | |
+| `Use Ssl` | `false` | |
+
+### Build do projeto
+
+`LightOrm.Unity.csproj` referencia `UnityEngine.dll` por path. O csproj **detecta automaticamente** se Unity está instalado:
+
+- **Com Unity**: compila os MonoBehaviour, copia o DLL para `..\Assets\Plugins`.
+- **Sem Unity** (CI, máquina sem editor): define `NO_UNITY` e pula MonoBehaviour. O projeto ainda compila — útil pra ferramentas que só precisam dos providers SQL.
+
+Customize o caminho via property ou env var:
+
+```bash
+dotnet build /p:UnityManagedPath=C:\Path\To\Unity\Editor\Data\Managed
+# ou
+UNITY_MANAGED_PATH=/Applications/Unity/Editor/Data/Managed dotnet build
+```
+
+### Limitações
+
+- IL2CPP em build de release: reflexão usada pelo ORM exige que tipos sejam preservados via `link.xml` ou atributos `[Preserve]`. Documentar caso a caso.
+- MongoDB: `MongoRepository` deve funcionar em Editor, mas o driver MongoDB.Driver tem dependências dinâmicas que podem falhar em builds AOT. Não testado em IL2CPP.
+- Veja [issue #49](https://github.com/MarcosBrendonDePaula/LightOrm/issues/49) para um helper específico de SQLite local.
 
 ---
 

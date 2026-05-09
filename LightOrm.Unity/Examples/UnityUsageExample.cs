@@ -1,83 +1,101 @@
-using UnityEngine;
+#if !NO_UNITY
+using System;
 using System.Threading.Tasks;
-using LightOrm.Core.Examples;
+using LightOrm.Core.Attributes;
+using LightOrm.Core.Models;
 using LightOrm.Unity.Database;
+using UnityEngine;
 
 namespace LightOrm.Unity.Examples
 {
+    // Modelos de exemplo — coloque os seus em arquivos próprios.
+
+    public class PlayerSave : BaseModel<PlayerSave, int>
+    {
+        public override string TableName => "player_save";
+
+        [Column("name", length: 50)]
+        [Required]
+        public string Name { get; set; }
+
+        [Column("level")]
+        public int Level { get; set; }
+
+        [Column("xp")]
+        public long Xp { get; set; }
+
+        [OneToMany("player_id", typeof(InventoryItem), cascade: true, cascadeDelete: true)]
+        public InventoryItem[] Inventory { get; set; }
+    }
+
+    public class InventoryItem : BaseModel<InventoryItem, int>
+    {
+        public override string TableName => "inventory_item";
+
+        [Column("name", length: 50)]
+        public string Name { get; set; }
+
+        [Column("quantity")]
+        public int Quantity { get; set; }
+
+        [Column("player_id")]
+        public int PlayerId { get; set; }
+    }
+
+    /// <summary>
+    /// Exemplo end-to-end: configure um GameObject com DatabaseManager
+    /// (provider = Sqlite, file = saves.db) e adicione esse script.
+    /// Ao rodar, ele cria as tabelas, salva um player com inventário em
+    /// cascata, e lê de volta com eager loading.
+    /// </summary>
     public class UnityUsageExample : MonoBehaviour
     {
         private async void Start()
         {
-            // The DatabaseManager is a singleton that handles the database connection
-            // You can configure the connection settings in the Unity Inspector
-            var dbManager = DatabaseManager.Instance;
-
             try
             {
-                // Initialize database tables
-                var playerTable = new PlayerModel();
-                var itemTable = new ItemModel();
-                var playerItemTable = new PlayerItemModel();
+                var db = DatabaseManager.Instance;
+                await db.InitializeAsync();
 
-                await playerTable.EnsureTableExistsAsync(dbManager.GetConnection());
-                await itemTable.EnsureTableExistsAsync(dbManager.GetConnection());
-                await playerItemTable.EnsureTableExistsAsync(dbManager.GetConnection());
+                var players = await db.GetRepositoryAsync<PlayerSave, int>();
+                var items   = await db.GetRepositoryAsync<InventoryItem, int>();
 
-                Debug.Log("Database tables initialized successfully");
+                await players.EnsureSchemaAsync();
+                await items.EnsureSchemaAsync();
 
-                // Create a new item
-                var sword = new ItemModel
+                // Cria player com inventário em cascata.
+                var arthur = new PlayerSave
                 {
-                    Name = "Excalibur",
-                    Description = "A legendary sword",
-                    Rarity = "Legendary",
-                    BaseValue = 1000
-                };
-                await sword.SaveAsync(dbManager.GetConnection());
-                Debug.Log($"Created item: {sword.Name}");
-
-                // Create a new player
-                var newPlayer = new PlayerModel
-                {
-                    Username = "Arthur",
-                    Email = "arthur@camelot.com",
+                    Name = "Arthur",
                     Level = 1,
-                    ExperiencePoints = 0,
-                    LastLogin = System.DateTime.UtcNow,
-                    IsActive = true
-                };
-                await newPlayer.SaveAsync(dbManager.GetConnection());
-                Debug.Log($"Created player: {newPlayer.Username}");
-
-                // Give the player the sword
-                var playerSword = new PlayerItemModel
-                {
-                    PlayerId = newPlayer.Id,
-                    ItemId = sword.Id,
-                    Quantity = 1
-                };
-                await playerSword.SaveAsync(dbManager.GetConnection());
-                Debug.Log($"Gave {sword.Name} to {newPlayer.Username}");
-
-                // Load player with related items
-                var loadedPlayer = await PlayerModel.FindByIdAsync(dbManager.GetConnection(), newPlayer.Id, includeRelated: true);
-                if (loadedPlayer != null)
-                {
-                    Debug.Log($"Loaded player: {loadedPlayer.Username} (Level {loadedPlayer.Level})");
-                    if (loadedPlayer.Items != null)
+                    Xp = 0,
+                    Inventory = new[]
                     {
-                        foreach (var inventoryItem in loadedPlayer.Items)
-                        {
-                            Debug.Log($"Inventory: {inventoryItem.Item?.Name} x{inventoryItem.Quantity}");
-                        }
+                        new InventoryItem { Name = "Excalibur", Quantity = 1 },
+                        new InventoryItem { Name = "Healing Potion", Quantity = 5 }
                     }
-                }
+                };
+                await players.SaveAsync(arthur);
+                Debug.Log($"[Example] Player {arthur.Name} salvo com id {arthur.Id} e " +
+                          $"{arthur.Inventory.Length} itens.");
+
+                // Lê com eager loading.
+                var loaded = await players.FindByIdAsync(arthur.Id, includeRelated: true);
+                Debug.Log($"[Example] Recarregado: {loaded.Name} (lvl {loaded.Level})");
+                foreach (var item in loaded.Inventory)
+                    Debug.Log($"[Example]   Inventário: {item.Name} x{item.Quantity}");
+
+                // Query builder portável.
+                var rares = await items.Query()
+                    .Where(nameof(InventoryItem.Name), "LIKE", "Excalibur%")
+                    .ToListAsync();
+                Debug.Log($"[Example] {rares.Count} item(ns) raros encontrados.");
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
-                Debug.LogError($"Database operation failed: {ex.Message}");
+                Debug.LogError($"[Example] Falha: {ex.Message}\n{ex.StackTrace}");
             }
         }
     }
 }
+#endif
