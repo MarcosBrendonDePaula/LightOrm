@@ -247,14 +247,9 @@ namespace LightOrm.Core.Sql
         {
             await EnsureOpenAsync();
             var idProp = GetIdProperty();
-            var idValue = idProp.GetValue(entity);
-            var isNew = IsDefaultId(idValue);
+            var isNew = IsDefaultId(idProp.GetValue(entity));
 
-            // Hooks: BeforeSave roda primeiro; depois validação (para que o
-            // hook possa ajustar valores antes de validar — ex.: trim em strings).
-            entity.OnBeforeSave(isNew);
-            await entity.OnBeforeSaveAsync(isNew);
-            ModelValidator.Validate(entity);
+            if (!await FireBeforeSaveHooksAsync(entity, isNew)) return entity;
 
             T result;
             if (isNew)
@@ -270,9 +265,35 @@ namespace LightOrm.Core.Sql
                 result = await UpdateAsync(entity, idProp);
             }
 
-            entity.OnAfterSave(isNew);
-            await entity.OnAfterSaveAsync(isNew);
+            await FireAfterSaveHooksAsync(entity, isNew);
             return result;
+        }
+
+        // Disparadores centralizados para reuso em SaveAsync, UpsertAsync, SaveManyAsync.
+        // Devolve true se a operação deve prosseguir; false para cancelar.
+        private static async Task<bool> FireBeforeSaveHooksAsync(T entity, bool isInsert)
+        {
+            entity.OnBeforeSave(isInsert);
+            await entity.OnBeforeSaveAsync(isInsert);
+            if (isInsert) { entity.OnBeforeCreate(); await entity.OnBeforeCreateAsync(); }
+            else          { entity.OnBeforeUpdate(); await entity.OnBeforeUpdateAsync(); }
+
+            if (!await entity.CanSaveAsync(isInsert)) return false;
+
+            entity.OnBeforeValidate();
+            await entity.OnBeforeValidateAsync();
+            ModelValidator.Validate(entity);
+            entity.OnAfterValidate();
+            await entity.OnAfterValidateAsync();
+            return true;
+        }
+
+        private static async Task FireAfterSaveHooksAsync(T entity, bool isInsert)
+        {
+            if (isInsert) { entity.OnAfterCreate(); await entity.OnAfterCreateAsync(); }
+            else          { entity.OnAfterUpdate(); await entity.OnAfterUpdateAsync(); }
+            entity.OnAfterSave(isInsert);
+            await entity.OnAfterSaveAsync(isInsert);
         }
 
         private static void AutoGenerateIdIfNeeded(T entity, PropertyInfo idProp)
@@ -332,6 +353,7 @@ namespace LightOrm.Core.Sql
             await EnsureOpenAsync();
             entity.OnBeforeDelete();
             await entity.OnBeforeDeleteAsync();
+            if (!await entity.CanDeleteAsync()) return;
 
             var idProp = GetIdProperty();
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
@@ -387,13 +409,21 @@ namespace LightOrm.Core.Sql
                     $"RestoreAsync requer [SoftDelete] em {typeof(T).Name}.");
 
             await EnsureOpenAsync();
+            entity.OnBeforeRestore();
+            await entity.OnBeforeRestoreAsync();
+
             var idProp = GetIdProperty();
             var idCol = TypeMetadataCache.GetColumnAttribute(idProp);
             sdProp.SetValue(entity, null);
             var sql = $"UPDATE {Q(_tableName)} SET {Q(sdName)} = NULL WHERE {Q(idCol.Name)} = {P(idCol.Name)}";
-            using var cmd = NewCommand(sql, _ambientTx);
-            AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
-            await cmd.ExecuteNonQueryAsync();
+            using (var cmd = NewCommand(sql, _ambientTx))
+            {
+                AddParam(cmd, idCol.Name, idProp.GetValue(entity), idProp.PropertyType);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            entity.OnAfterRestore();
+            await entity.OnAfterRestoreAsync();
         }
 
         private string SelectColumnList()
@@ -513,9 +543,11 @@ namespace LightOrm.Core.Sql
                 }
 
                 isInsert = !exists;
-                entity.OnBeforeSave(isInsert);
-                await entity.OnBeforeSaveAsync(isInsert);
-                ModelValidator.Validate(entity);
+                if (!await FireBeforeSaveHooksAsync(entity, isInsert))
+                {
+                    if (owned) tx.Commit();
+                    return entity;
+                }
 
                 if (exists)
                 {
@@ -531,8 +563,7 @@ namespace LightOrm.Core.Sql
                 await CascadeSaver.SaveCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
 
                 if (owned) tx.Commit();
-                entity.OnAfterSave(isInsert);
-                await entity.OnAfterSaveAsync(isInsert);
+                await FireAfterSaveHooksAsync(entity, isInsert);
                 return entity;
             }
             catch
@@ -555,17 +586,19 @@ namespace LightOrm.Core.Sql
             await EnsureOpenAsync();
             var idProp = GetIdProperty();
             var (tx, owned) = BeginOrUseTx();
-            var states = new List<(T entity, bool isNew)>(list.Count);
+            var states = new List<(T entity, bool isNew, bool cancelled)>(list.Count);
             try
             {
                 foreach (var entity in list)
                 {
                     var idValue = idProp.GetValue(entity);
                     var isNew = IsDefaultId(idValue);
-                    entity.OnBeforeSave(isNew);
-                    await entity.OnBeforeSaveAsync(isNew);
-                    ModelValidator.Validate(entity);
-                    states.Add((entity, isNew));
+                    if (!await FireBeforeSaveHooksAsync(entity, isNew))
+                    {
+                        states.Add((entity, isNew, cancelled: true));
+                        continue;
+                    }
+                    states.Add((entity, isNew, cancelled: false));
 
                     if (isNew)
                     {
@@ -582,10 +615,10 @@ namespace LightOrm.Core.Sql
                     await CascadeSaver.SaveCascadesAsync(_connection, _dialect, tx, typeof(T), entity, idProp);
                 }
                 if (owned) tx.Commit();
-                foreach (var (entity, isNew) in states)
+                foreach (var (entity, isNew, cancelled) in states)
                 {
-                    entity.OnAfterSave(isNew);
-                    await entity.OnAfterSaveAsync(isNew);
+                    if (cancelled) continue;
+                    await FireAfterSaveHooksAsync(entity, isNew);
                 }
                 return list;
             }
