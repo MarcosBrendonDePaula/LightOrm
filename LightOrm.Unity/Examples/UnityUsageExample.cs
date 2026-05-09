@@ -57,8 +57,11 @@ namespace LightOrm.Unity.Examples
                 var db = DatabaseManager.Instance;
                 await db.InitializeAsync();
 
-                var players = await db.GetRepositoryAsync<PlayerSave, int>();
-                var items   = await db.GetRepositoryAsync<InventoryItem, int>();
+                // Sintaxe simples (TId descoberto via reflexão):
+                var players = await db.GetRepositoryAsync<PlayerSave>();
+                var items   = await db.GetRepositoryAsync<InventoryItem>();
+                // Ou explícito (útil quando você quer passar IRepository<T,TId> adiante):
+                // var players = await db.GetRepositoryAsync<PlayerSave, int>();
 
                 await players.EnsureSchemaAsync();
                 await items.EnsureSchemaAsync();

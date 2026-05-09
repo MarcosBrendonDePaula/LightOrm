@@ -152,6 +152,22 @@ namespace LightOrm.Unity.Database
         }
 
         /// <summary>
+        /// Overload conveniente: descobre TId automaticamente inspecionando
+        /// a herança BaseModel&lt;T, TId&gt; do tipo.
+        /// Uso: var repo = await db.GetRepositoryAsync&lt;PlayerSave&gt;();
+        /// Devolve dynamic — você pode chamar SaveAsync, FindByIdAsync etc.
+        /// Use a versão de 2 parâmetros se precisar do tipo concreto
+        /// IRepository&lt;T, TId&gt; (ex.: passar para outra classe).
+        /// </summary>
+        public async Task<dynamic> GetRepositoryAsync<T>() where T : class, new()
+        {
+            await InitializeAsync();
+            var idType = ResolveIdType(typeof(T));
+            var repoType = typeof(SqlRepository<,>).MakeGenericType(typeof(T), idType);
+            return Activator.CreateInstance(repoType, _connection, _dialect, null);
+        }
+
+        /// <summary>
         /// Versão síncrona. Lança se ainda não inicializado — chame
         /// InitializeAsync() em algum Start() async antes.
         /// </summary>
@@ -163,6 +179,20 @@ namespace LightOrm.Unity.Database
                     "DatabaseManager ainda não foi inicializado. " +
                     "Chame await InitializeAsync() antes ou use GetRepositoryAsync().");
             return new SqlRepository<T, TId>(_connection, _dialect);
+        }
+
+        private static Type ResolveIdType(Type modelType)
+        {
+            var t = modelType;
+            while (t != null && t != typeof(object))
+            {
+                if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(BaseModel<,>))
+                    return t.GetGenericArguments()[1];
+                t = t.BaseType;
+            }
+            throw new InvalidOperationException(
+                $"Tipo {modelType.Name} não herda BaseModel<T, TId> — não consigo " +
+                $"descobrir o tipo da chave. Use GetRepositoryAsync<T, TId>() explicitamente.");
         }
 
         /// <summary>Connection bruta — caso o dev queira controle direto.</summary>

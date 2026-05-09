@@ -635,7 +635,8 @@ public class GameManager : MonoBehaviour
         var db = DatabaseManager.Instance;
         await db.InitializeAsync();              // abre connection com base no provider escolhido
 
-        var players = await db.GetRepositoryAsync<PlayerSave, int>();
+        // TId descoberto automaticamente da herança BaseModel<T, TId>:
+        var players = await db.GetRepositoryAsync<PlayerSave>();
         await players.EnsureSchemaAsync();
 
         var arthur = new PlayerSave { Name = "Arthur", Level = 1 };
