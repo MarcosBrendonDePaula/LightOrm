@@ -625,18 +625,42 @@ Migrations descobertas via reflexão no assembly que você passa, ordenadas por 
 
 ## Unity
 
-`LightOrm.Unity.Database.DatabaseManager` é um MonoBehaviour singleton que cobre os três providers SQL com configuração via Inspector. SQLite é o default (caso comum: save local).
+**Validado ponta-a-ponta em Unity 6 (6000.4.5f1)** — SQLite e PostgreSQL rodando in-game contra bancos reais. Não precisa de package manager nem Git URL — copie os DLLs prontos da pasta `dist/`.
+
+### Instalação rápida (SQLite — caso comum)
+
+1. Gere o pacote drop-in (precisa só uma vez):
+   ```bash
+   ./scripts/build-unity-dist.sh
+   ```
+   O script roda `dotnet publish` dos providers, filtra DLLs que conflitam com Unity 6, copia native do SQLite e gera `dist/`.
+2. Copie para o Unity:
+   ```
+   dist/Plugins/LightOrm/      →  YourProject/Assets/Plugins/LightOrm/
+   dist/Scripts/LightOrm/      →  YourProject/Assets/Scripts/LightOrm/
+   ```
+3. Crie GameObject "DatabaseManager", adicione o script `LightOrm.Unity.Database.DatabaseManager`.
+4. Provider = SQLite (default). Pronto.
 
 ```csharp
+public class PlayerSave : BaseModel<PlayerSave, int>
+{
+    public override string TableName => "player_save";
+    [Column("name", length: 50)] public string Name { get; set; }
+    [Column("level")]            public int Level { get; set; }
+}
+
 public class GameManager : MonoBehaviour
 {
     private async void Start()
     {
         var db = DatabaseManager.Instance;
-        await db.InitializeAsync();              // abre connection com base no provider escolhido
+        await db.InitializeAsync();
 
-        // TId descoberto automaticamente da herança BaseModel<T, TId>:
-        var players = await db.GetRepositoryAsync<PlayerSave>();
+        // No Unity, use sempre a versão de 2 parâmetros (<T, TId>) —
+        // a versão de 1 parâmetro devolve dynamic, e dynamic exige
+        // Microsoft.CSharp.dll que não vem no scripting runtime padrão.
+        var players = await db.GetRepositoryAsync<PlayerSave, int>();
         await players.EnsureSchemaAsync();
 
         var arthur = new PlayerSave { Name = "Arthur", Level = 1 };
@@ -646,52 +670,64 @@ public class GameManager : MonoBehaviour
 }
 ```
 
-### Duas versões de `GetRepositoryAsync`
+O arquivo é criado em `Application.persistentDataPath/lightorm.db` (Windows: `%APPDATA%\..\LocalLow\<Company>\<Product>\`). Abra com [DB Browser for SQLite](https://sqlitebrowser.org/) para inspecionar.
 
-O `TId` faz parte da tipagem do modelo (`PlayerSave : BaseModel<PlayerSave, int>`), mas o C# não consegue **inferir** o segundo parâmetro genérico apenas a partir do primeiro. O `DatabaseManager` oferece dois overloads e você escolhe baseado no que precisa:
+### Backends suportados em Unity (testado)
 
-| Versão | Sintaxe | Devolve | Quando usar |
+| Backend | Funciona? | Tamanho dos plugins | Ideal para |
 |---|---|---|---|
-| **Curta (com reflexão)** | `db.GetRepositoryAsync<PlayerSave>()` | `dynamic` | Uso direto no `Start()`/`Update()`. Menos digitar; perde IntelliSense nas chamadas seguintes. |
-| **Explícita (type-safe)** | `db.GetRepositoryAsync<PlayerSave, int>()` | `SqlRepository<PlayerSave, int>` | Quando você passa o repo adiante (campo, parâmetro, DI). Mantém IntelliSense e checagem em compile time. |
+| **SQLite** | ✅ | ~1.7 MB (5 DLLs + native x64 Win/Linux/macOS) | Save local de jogo |
+| **PostgreSQL** | ✅ | ~3 MB (Npgsql + 5 deps Microsoft/System) | Backend remoto (mas veja aviso) |
+| **MySQL** | Provavelmente sim | ~5 MB | Backend remoto (mesmo aviso) |
+| **MongoDB** | ❌ | — | Driver tem dependências (`mongocrypt`, `AWSSDK`, `DnsClient`) que conflitam com o validador de assemblies do Unity. Use server-side. |
 
-A versão curta usa reflexão **uma vez** para descobrir o `TId` (varre a hierarquia procurando `BaseModel<,>`), depois chama o construtor genérico. Custo desprezível, mas o tipo de retorno é `dynamic` — `repo.SaveAsync(...)` compila sem erro mesmo se você passar coisa errada, e só falha em runtime.
+> ⚠️ **Aviso de segurança em MySQL/Postgres direto do cliente:** connection string fica no binário do jogo. Qualquer player extrai com decompiler e tem acesso ao banco. Para multiplayer/leaderboard remoto, use o LightOrm **no servidor** e exponha REST/gRPC autenticado. SQLite local não tem esse problema (é arquivo do próprio dispositivo).
 
-Para código de produção que passa repositórios entre classes, prefira a versão explícita:
+### PostgreSQL no Unity — receita validada
 
-```csharp
-public class PlayerService
-{
-    private readonly IRepository<PlayerSave, int> _repo;
-
-    public PlayerService(IRepository<PlayerSave, int> repo) { _repo = repo; }
-    // Aqui você precisa do tipo concreto pra injeção funcionar.
-}
-
-// No setup:
-var playerRepo = await db.GetRepositoryAsync<PlayerSave, int>();
-var service = new PlayerService(playerRepo);
+```
+Plugins/LightOrm/Postgres/
+├── LightOrm.Postgres.dll
+├── Npgsql.dll
+├── Microsoft.Extensions.DependencyInjection.Abstractions.dll
+├── Microsoft.Extensions.Logging.Abstractions.dll
+├── System.Diagnostics.DiagnosticSource.dll       ← essencial, NÃO remova
+└── System.Threading.Channels.dll                 ← essencial, NÃO remova
 ```
 
-### Configuração no Inspector
+**Não copie:** `System.Buffers.dll`, `System.Memory.dll`, `System.Numerics.Vectors.dll`, `System.Runtime.CompilerServices.Unsafe.dll`, `Microsoft.Bcl.AsyncInterfaces.dll` — Unity 6 já tem versões próprias. Duplicar quebra com `TopologicalSort NullReferenceException` no domain reload.
+
+```csharp
+var db = PostgresDatabaseManager.Instance;
+await db.InitializeAsync();          // host/porta/credenciais via Inspector
+var repo = await db.GetRepositoryAsync<GameSession, int>();
+await repo.EnsureSchemaAsync();      // CREATE TABLE com SERIAL (auto-increment Postgres)
+await repo.SaveAsync(new GameSession { ... });
+```
+
+### Configuração do `DatabaseManager` (SQLite) no Inspector
 
 | Campo | Padrão | Descrição |
 |---|---|---|
-| `Provider` | `Sqlite` | Dropdown: Sqlite / MySql / Postgres |
-| **SQLite** | | |
 | `Sqlite File Name` | `lightorm.db` | Arquivo dentro de `Application.persistentDataPath` |
-| `Sqlite In Memory` | `false` | `true` = banco em memória (perdido ao fechar) |
-| **MySQL / Postgres** | | |
-| `Server`, `Database`, `User Id`, `Password`, `Port` | — | Connection string |
-| `Pooling` | `true` | |
-| `Use Ssl` | `false` | |
+| `Sqlite In Memory` | `false` | `true` = banco em memória (perdido ao fechar) — útil em testes |
 
-### Build do projeto
+### Solução de problemas comuns
+
+| Sintoma | Causa | Fix |
+|---|---|---|
+| `Lifecycle ERROR: Failed to setup LifecycleManagement... NullReferenceException` | DLL `System.*` ou `Microsoft.Bcl.*` duplicada (Unity já tem) | Apague essas DLLs específicas do `Assets/Plugins/LightOrm/<Provider>/` |
+| `Unable to resolve reference 'X'. Is the assembly missing or incompatible with the current platform?` | DLL dependência faltando | Compare com a "receita validada" acima e copie a DLL faltante do `dotnet publish` |
+| `error CS2001: Source file '...' could not be found` | Cache `Library/Bee` com referência podre a arquivo deletado | Feche Unity, apague `Library/Bee/` e `Library/ScriptAssemblies/`, reabra |
+| `Component type 'X' not found` ao adicionar via MCP/script | Compilação ainda em andamento | Aguarde recompile, depois adicione |
+| `dynamic` exige Microsoft.CSharp.dll | Unity scripting runtime sem ele | Use `GetRepositoryAsync<T, TId>()` (com 2 parâmetros) em vez de `<T>` |
+
+### Build do .csproj
 
 `LightOrm.Unity.csproj` referencia `UnityEngine.dll` por path. O csproj **detecta automaticamente** se Unity está instalado:
 
 - **Com Unity**: compila os MonoBehaviour, copia o DLL para `..\Assets\Plugins`.
-- **Sem Unity** (CI, máquina sem editor): define `NO_UNITY` e pula MonoBehaviour. O projeto ainda compila — útil pra ferramentas que só precisam dos providers SQL.
+- **Sem Unity** (CI, máquina sem editor): define `NO_UNITY` e pula MonoBehaviour. Útil pra ferramentas que só precisam dos providers SQL.
 
 Customize o caminho via property ou env var:
 
@@ -701,10 +737,17 @@ dotnet build /p:UnityManagedPath=C:\Path\To\Unity\Editor\Data\Managed
 UNITY_MANAGED_PATH=/Applications/Unity/Editor/Data/Managed dotnet build
 ```
 
-### Limitações
+### Limitações no Unity
 
-- IL2CPP em build de release: reflexão usada pelo ORM exige que tipos sejam preservados via `link.xml` ou atributos `[Preserve]`. Documentar caso a caso.
-- MongoDB: `MongoRepository` deve funcionar em Editor, mas o driver MongoDB.Driver tem dependências dinâmicas que podem falhar em builds AOT. Não testado em IL2CPP.
+- **MongoDB não funciona.** Driver tem libmongocrypt nativo + AWSSDK + DnsClient — incompatibilidades em cascata com o validador de assemblies. Use Mongo no servidor.
+- **IL2CPP**: reflexão usada pelo ORM exige `link.xml` na raiz do `Assets/` para preservar tipos do modelo:
+  ```xml
+  <linker>
+    <assembly fullname="LightOrm.Core" preserve="all" />
+    <assembly fullname="LightOrm.Sqlite" preserve="all" />
+  </linker>
+  ```
+- **`dynamic`** não suportado pelo scripting runtime padrão — use `<T, TId>` explícito sempre.
 - Veja [issue #49](https://github.com/MarcosBrendonDePaula/LightOrm/issues/49) para um helper específico de SQLite local.
 
 ---
