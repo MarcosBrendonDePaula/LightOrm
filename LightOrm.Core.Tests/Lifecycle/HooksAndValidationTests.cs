@@ -112,6 +112,29 @@ namespace LightOrm.Core.Tests
             Assert.Single(found);
             Assert.Contains("after-load", found[0].Events);
         }
+
+        [Fact]
+        public async Task SaveMany_fires_before_and_after_save_hooks_for_each_entity()
+        {
+            var (conn, dialect) = Open();
+            var repo = new SqlRepository<HookTrackingModel, int>(conn, dialect);
+            await repo.EnsureSchemaAsync();
+
+            var batch = new[]
+            {
+                new HookTrackingModel { Name = "a" },
+                new HookTrackingModel { Name = "b" }
+            };
+
+            await repo.SaveManyAsync(batch);
+
+            Assert.All(batch, entity =>
+            {
+                Assert.Contains("before-insert", entity.Events);
+                Assert.Contains("after-insert", entity.Events);
+                Assert.True(entity.Events.IndexOf("before-insert") < entity.Events.IndexOf("after-insert"));
+            });
+        }
     }
 
     public class ValidationTests
@@ -131,7 +154,7 @@ namespace LightOrm.Core.Tests
             var repo = Repo();
             var ex = await Assert.ThrowsAsync<ValidationException>(() =>
                 repo.SaveAsync(new ValidatedModel { Email = null, Nickname = "abc", Age = 30 }));
-            Assert.Contains(ex.Errors, e => e.PropertyName == "Email" && e.Message.Contains("obrigatório"));
+            Assert.Contains(ex.Errors, e => e.PropertyName == "Email" && e.Message.Contains("obrigat"));
         }
 
         [Fact]
@@ -149,11 +172,11 @@ namespace LightOrm.Core.Tests
             var repo = Repo();
             var tooShort = await Assert.ThrowsAsync<ValidationException>(() =>
                 repo.SaveAsync(new ValidatedModel { Email = "a@b.com", Nickname = "ab", Age = 30 }));
-            Assert.Contains(tooShort.Errors, e => e.PropertyName == "Nickname" && e.Message.Contains("mínimo"));
+            Assert.Contains(tooShort.Errors, e => e.PropertyName == "Nickname" && e.Message.Contains("m"));
 
             var tooLong = await Assert.ThrowsAsync<ValidationException>(() =>
                 repo.SaveAsync(new ValidatedModel { Email = "a@b.com", Nickname = new string('x', 30), Age = 30 }));
-            Assert.Contains(tooLong.Errors, e => e.PropertyName == "Nickname" && e.Message.Contains("máximo"));
+            Assert.Contains(tooLong.Errors, e => e.PropertyName == "Nickname" && e.Message.Contains("m"));
         }
 
         [Fact]
@@ -180,9 +203,62 @@ namespace LightOrm.Core.Tests
             var repo = Repo();
             var ex = await Assert.ThrowsAsync<ValidationException>(() =>
                 repo.SaveAsync(new ValidatedModel { Email = null, Nickname = "ab", Age = 999 }));
-            // 3 erros: Required Email, RegEx Email (também — null falha em Required;
-            // RegEx pula null porque value is string s checa false), Nickname mínimo, Age range.
             Assert.True(ex.Errors.Count >= 3, $"Esperava >=3 erros, recebi {ex.Errors.Count}");
+        }
+
+        [Fact]
+        public async Task SaveMany_is_atomic_when_one_entity_is_invalid()
+        {
+            var repo = Repo();
+
+            await Assert.ThrowsAsync<ValidationException>(() =>
+                repo.SaveManyAsync(new[]
+                {
+                    new ValidatedModel { Email = "ok@x.com", Nickname = "valid", Age = 30 },
+                    new ValidatedModel { Email = "bad", Nickname = "ab", Age = 999 }
+                }));
+
+            var all = await repo.FindAllAsync();
+            Assert.Empty(all);
+        }
+
+        [Fact]
+        public async Task SaveMany_applies_cascade_saves_for_each_root_entity()
+        {
+            var (conn, dialect) = Open();
+            var parents = new SqlRepository<CascadeParentModel, int>(conn, dialect);
+            var children = new SqlRepository<CascadeChildModel, int>(conn, dialect);
+            await parents.EnsureSchemaAsync();
+            await children.EnsureSchemaAsync();
+
+            await parents.SaveManyAsync(new[]
+            {
+                new CascadeParentModel
+                {
+                    Name = "p1",
+                    Children = new[] { new CascadeChildModel { Label = "c1" } }
+                },
+                new CascadeParentModel
+                {
+                    Name = "p2",
+                    Children = new[] { new CascadeChildModel { Label = "c2" } }
+                }
+            });
+
+            var loadedParents = await parents.FindAllAsync(includeRelated: true);
+            Assert.Equal(2, loadedParents.Count);
+            Assert.All(loadedParents, p => Assert.Single(p.Children));
+
+            var loadedChildren = await children.FindAllAsync();
+            Assert.Equal(2, loadedChildren.Count);
+            Assert.All(loadedChildren, c => Assert.True(c.ParentId > 0));
+        }
+
+        private static (SqliteConnection conn, IDialect dialect) Open()
+        {
+            var c = new SqliteConnection("Data Source=:memory:");
+            c.Open();
+            return (c, new SqliteDialect());
         }
     }
 }

@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
+using LightOrm.Core.Attributes;
+using LightOrm.Core.Models;
 using LightOrm.Core.Sql;
 using LightOrm.Core.Tests.Models;
+using LightOrm.Core.Validation;
 using LightOrm.Mongo;
 using LightOrm.Sqlite;
 using Microsoft.Data.Sqlite;
@@ -101,6 +105,41 @@ namespace LightOrm.Core.Tests
             var loaded = await repo.FindByIdAsync(id);
             Assert.Equal("updated-via-upsert", loaded.Name);
         }
+
+        [Fact]
+        public async Task Upsert_with_explicit_id_runs_hooks_and_validation_on_insert_and_update()
+        {
+            var (conn, dialect) = Open();
+            var repo = new SqlRepository<UpsertTrackedModel, string>(conn, dialect);
+            await repo.EnsureSchemaAsync();
+
+            var entity = new UpsertTrackedModel { Id = "tracked-1", Name = "ana" };
+            await repo.UpsertAsync(entity);
+
+            Assert.Equal(new[] { "before-insert", "after-insert" }, entity.Events);
+
+            entity.Events.Clear();
+            entity.Name = "bia";
+            await repo.UpsertAsync(entity);
+
+            Assert.Equal(new[] { "before-update", "after-update" }, entity.Events);
+        }
+
+        [Fact]
+        public async Task Upsert_with_explicit_id_rejects_invalid_entity_without_partial_insert()
+        {
+            var (conn, dialect) = Open();
+            var repo = new SqlRepository<UpsertTrackedModel, string>(conn, dialect);
+            await repo.EnsureSchemaAsync();
+
+            var invalid = new UpsertTrackedModel { Id = "tracked-bad", Name = "" };
+            await Assert.ThrowsAsync<ValidationException>(() => repo.UpsertAsync(invalid));
+
+            var all = await repo.FindAllAsync();
+            Assert.Empty(all);
+            Assert.Contains("before-insert", invalid.Events);
+            Assert.DoesNotContain("after-insert", invalid.Events);
+        }
     }
 
     public class UpsertMongoTests : IAsyncLifetime
@@ -153,5 +192,23 @@ namespace LightOrm.Core.Tests
             Assert.Equal(firstCreatedAt.Month, loaded.CreatedAt.Month);
             Assert.Equal(firstCreatedAt.Day, loaded.CreatedAt.Day);
         }
+    }
+
+    public class UpsertTrackedModel : BaseModel<UpsertTrackedModel, string>
+    {
+        public override string TableName => "upsert_tracked";
+
+        [Column("name", length: 40)]
+        [Required]
+        [MinLength(2)]
+        public string Name { get; set; }
+
+        public List<string> Events { get; } = new List<string>();
+
+        protected internal override void OnBeforeSave(bool isInsert)
+            => Events.Add(isInsert ? "before-insert" : "before-update");
+
+        protected internal override void OnAfterSave(bool isInsert)
+            => Events.Add(isInsert ? "after-insert" : "after-update");
     }
 }
