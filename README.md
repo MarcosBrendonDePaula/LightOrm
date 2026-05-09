@@ -646,6 +646,33 @@ public class GameManager : MonoBehaviour
 }
 ```
 
+### Duas versões de `GetRepositoryAsync`
+
+O `TId` faz parte da tipagem do modelo (`PlayerSave : BaseModel<PlayerSave, int>`), mas o C# não consegue **inferir** o segundo parâmetro genérico apenas a partir do primeiro. O `DatabaseManager` oferece dois overloads e você escolhe baseado no que precisa:
+
+| Versão | Sintaxe | Devolve | Quando usar |
+|---|---|---|---|
+| **Curta (com reflexão)** | `db.GetRepositoryAsync<PlayerSave>()` | `dynamic` | Uso direto no `Start()`/`Update()`. Menos digitar; perde IntelliSense nas chamadas seguintes. |
+| **Explícita (type-safe)** | `db.GetRepositoryAsync<PlayerSave, int>()` | `SqlRepository<PlayerSave, int>` | Quando você passa o repo adiante (campo, parâmetro, DI). Mantém IntelliSense e checagem em compile time. |
+
+A versão curta usa reflexão **uma vez** para descobrir o `TId` (varre a hierarquia procurando `BaseModel<,>`), depois chama o construtor genérico. Custo desprezível, mas o tipo de retorno é `dynamic` — `repo.SaveAsync(...)` compila sem erro mesmo se você passar coisa errada, e só falha em runtime.
+
+Para código de produção que passa repositórios entre classes, prefira a versão explícita:
+
+```csharp
+public class PlayerService
+{
+    private readonly IRepository<PlayerSave, int> _repo;
+
+    public PlayerService(IRepository<PlayerSave, int> repo) { _repo = repo; }
+    // Aqui você precisa do tipo concreto pra injeção funcionar.
+}
+
+// No setup:
+var playerRepo = await db.GetRepositoryAsync<PlayerSave, int>();
+var service = new PlayerService(playerRepo);
+```
+
 ### Configuração no Inspector
 
 | Campo | Padrão | Descrição |
