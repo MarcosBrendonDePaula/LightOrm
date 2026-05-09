@@ -99,6 +99,34 @@ namespace LightOrm.Core.Tests.Models
         protected internal override void OnAfterLoad() => Events.Add("after-load");
     }
 
+    [SoftDelete]
+    public class GranularHookModel : BaseModel<GranularHookModel, int>
+    {
+        public override string TableName => "granular_hook";
+
+        [Column("name", length: 50)] public string Name { get; set; }
+
+        public System.Collections.Generic.List<string> Events { get; set; }
+            = new System.Collections.Generic.List<string>();
+
+        public bool BlockSave { get; set; }
+        public bool BlockDelete { get; set; }
+
+        protected internal override void OnBeforeCreate() => Events.Add("before-create");
+        protected internal override void OnAfterCreate()  => Events.Add("after-create");
+        protected internal override void OnBeforeUpdate() => Events.Add("before-update");
+        protected internal override void OnAfterUpdate()  => Events.Add("after-update");
+        protected internal override void OnBeforeValidate() => Events.Add("before-validate");
+        protected internal override void OnAfterValidate()  => Events.Add("after-validate");
+        protected internal override void OnBeforeRestore() => Events.Add("before-restore");
+        protected internal override void OnAfterRestore()  => Events.Add("after-restore");
+
+        protected internal override Task<bool> CanSaveAsync(bool isInsert)
+            => Task.FromResult(!BlockSave);
+        protected internal override Task<bool> CanDeleteAsync()
+            => Task.FromResult(!BlockDelete);
+    }
+
     public class ValidatedModel : BaseModel<ValidatedModel, int>
     {
         public override string TableName => "validated";

@@ -152,7 +152,15 @@ namespace LightOrm.Mongo
 
             entity.OnBeforeSave(isNew);
             await entity.OnBeforeSaveAsync(isNew);
+            if (isNew) { entity.OnBeforeCreate(); await entity.OnBeforeCreateAsync(); }
+            else       { entity.OnBeforeUpdate(); await entity.OnBeforeUpdateAsync(); }
+            if (!await entity.CanSaveAsync(isNew)) return entity;
+
+            entity.OnBeforeValidate();
+            await entity.OnBeforeValidateAsync();
             LightOrm.Core.Validation.ModelValidator.Validate(entity);
+            entity.OnAfterValidate();
+            await entity.OnAfterValidateAsync();
 
             if (isNew)
             {
@@ -206,6 +214,8 @@ namespace LightOrm.Mongo
                 await _collection.ReplaceOneAsync(filter, doc, new ReplaceOptions { IsUpsert = true });
             }
 
+            if (isNew) { entity.OnAfterCreate(); await entity.OnAfterCreateAsync(); }
+            else       { entity.OnAfterUpdate(); await entity.OnAfterUpdateAsync(); }
             entity.OnAfterSave(isNew);
             await entity.OnAfterSaveAsync(isNew);
             return entity;
@@ -250,6 +260,7 @@ namespace LightOrm.Mongo
         {
             entity.OnBeforeDelete();
             await entity.OnBeforeDeleteAsync();
+            if (!await entity.CanDeleteAsync()) return;
             var idValue = _idProp.GetValue(entity);
             var filter = Builders<BsonDocument>.Filter.Eq("_id", BsonValue.Create(idValue));
 
@@ -275,11 +286,15 @@ namespace LightOrm.Mongo
             if (_softDeleteField == null)
                 throw new InvalidOperationException(
                     $"RestoreAsync requer [SoftDelete] em {typeof(T).Name}.");
+            entity.OnBeforeRestore();
+            await entity.OnBeforeRestoreAsync();
             var idValue = _idProp.GetValue(entity);
             var filter = Builders<BsonDocument>.Filter.Eq("_id", BsonValue.Create(idValue));
             var update = Builders<BsonDocument>.Update.Set(_softDeleteField, BsonNull.Value);
             await _collection.UpdateOneAsync(filter, update);
             _softDeleteProp.SetValue(entity, null);
+            entity.OnAfterRestore();
+            await entity.OnAfterRestoreAsync();
         }
 
         public Task<T> FindByIdIncludingDeletedAsync(TId id) =>
