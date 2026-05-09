@@ -300,7 +300,7 @@ public class User : BaseModel<User, int>
     protected internal override void OnBeforeCreate()
     {
         if (!string.IsNullOrEmpty(PlainPassword))
-            PasswordHash = BCrypt.HashPassword(PlainPassword);
+            PasswordHash = HashPassword(PlainPassword);   // use seu hash favorito
     }
 }
 ```
